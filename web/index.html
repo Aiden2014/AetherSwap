@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/variables.css" />
   <link rel="stylesheet" href="/css/base.css" />
   <link rel="stylesheet" href="/css/layout.css?v=2" />
-  <link rel="stylesheet" href="/css/components.css?v=6" />
+  <link rel="stylesheet" href="/css/components.css?v=7" />
   <link rel="stylesheet" href="/css/animations.css" />
   <style>
     /* Nav badge */
@@ -1714,10 +1714,17 @@
 
   <div id="inventory-holdings-overlay" class="relogin-overlay hidden">
     <div class="relogin-modal inventory-holdings-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-holdings-title">
-      <h3 id="inventory-holdings-title">添加到持有饰品</h3>
-      <p class="muted small">自动匹配 BUFF 已完成的购入记录，可逐件修改购入价（人民币）。已有相同 assetid 的记录会跳过。</p>
-      <p class="muted small">胶囊、武器箱等同款价格一致时自动填入；存在多个成交价时，请选择或手动填写。</p>
-      <p class="muted small">按 BUFF 付款时间填入 Steam 历史成交参考价（非当时最低在售价），可修改；多笔同款请先选择购买记录。外币按当前汇率折算，未查到则留空。</p>
+      <div class="inventory-holdings-header">
+        <h3 id="inventory-holdings-title">添加到持有饰品</h3>
+        <details class="inventory-holdings-help">
+          <summary>填写说明</summary>
+          <div class="inventory-holdings-help-content">
+            <p>自动匹配 BUFF 已完成的购入记录，可逐件修改购入价（人民币）。已有相同 assetid 的记录会跳过。</p>
+            <p>胶囊、武器箱等同款价格一致时自动填入；存在多个成交价时，请选择或手动填写。</p>
+            <p>按 BUFF 付款时间填入 Steam 历史成交参考价（非当时最低在售价），可修改；多笔同款请先选择购买记录。外币按当前汇率折算，未查到则留空。</p>
+          </div>
+        </details>
+      </div>
       <p id="inventory-holdings-status" class="muted small" role="status"></p>
       <div class="inventory-holdings-selection">
         <label><input id="inventory-holdings-select-all" type="checkbox" /> 全选列表物品</label>

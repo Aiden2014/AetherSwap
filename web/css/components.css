@@ -1499,22 +1499,77 @@ textarea.app-modal-input {
 }
 
 .inventory-holdings-modal {
-  width: calc(100vw - 48px);
-  max-width: 1140px;
-  max-height: calc(100dvh - 48px);
+  width: calc(100vw - 24px);
+  max-width: 1600px;
+  height: calc(100dvh - 24px);
+  max-height: calc(100dvh - 24px);
+  padding: 24px;
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.inventory-holdings-modal > h3,
+.inventory-holdings-header,
 .inventory-holdings-modal > p,
 .inventory-holdings-selection,
 .inventory-holdings-actions {
   flex-shrink: 0;
 }
 
+.inventory-holdings-header {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.inventory-holdings-header h3 {
+  margin: 0;
+}
+
+.inventory-holdings-help summary {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.inventory-holdings-help-content {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 3;
+  width: min(520px, calc(100vw - 64px));
+  max-height: 40dvh;
+  overflow: auto;
+  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.inventory-holdings-help-content p {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
+.inventory-holdings-help-content p:last-child {
+  margin-bottom: 0;
+}
+
+#inventory-holdings-status {
+  margin: 0 0 10px;
+  max-height: 3.2em;
+  overflow: auto;
+  font-size: 13px;
+}
+
 .inventory-holdings-modal .table-container {
+  flex: 1;
   min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
@@ -1526,7 +1581,7 @@ textarea.app-modal-input {
 
 #inventory-holdings-table th,
 #inventory-holdings-table td {
-  padding: 14px 16px;
+  padding: 10px 14px;
   vertical-align: middle;
 }
 
@@ -1582,6 +1637,7 @@ textarea.app-modal-input {
 #inventory-holdings-table .inv-holding-price-choice {
   width: 100%;
   min-width: 0;
+  padding: 8px 10px;
 }
 
 #inventory-holdings-table .inv-holding-purchase-choice {
@@ -1595,6 +1651,7 @@ textarea.app-modal-input {
   display: block;
   margin-top: 6px;
   line-height: 1.5;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -1609,7 +1666,7 @@ textarea.app-modal-input {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: 12px;
 }
 
 #inventory-holdings-cancel {
@@ -1618,9 +1675,10 @@ textarea.app-modal-input {
 
 @media (max-width: 760px) {
   .inventory-holdings-modal {
-    width: calc(100vw - 24px);
-    max-height: calc(100dvh - 24px);
-    padding: 20px;
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 16px;
   }
 
   #inventory-holdings-table,
@@ -1682,6 +1740,8 @@ textarea.app-modal-input {
   }
 
   #inventory-holdings-cancel { margin-left: 0; }
+
+  #inventory-holdings-save { grid-column: 1 / -1; }
 }
 
 .relogin-actions {

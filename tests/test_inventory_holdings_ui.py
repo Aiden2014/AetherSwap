@@ -20,7 +20,7 @@ def browser():
         browser.close()
 
 
-@pytest.fixture(params=[(1440, 1000), (390, 844)])
+@pytest.fixture(params=[(1440, 1000), (1248, 700), (390, 844)])
 def page(browser, request):
     web = Path(__file__).resolve().parent.parent / 'web'
     width, height = request.param
@@ -215,20 +215,37 @@ def test_dialog_layout_keeps_long_item_names_and_status_readable(page, tmp_path)
     page.screenshot(path=str(tmp_path / f'inventory-holdings-{width}.png'), animations='disabled')
 
 
-def test_large_batch_scrolls_items_while_actions_remain_visible(page):
+def test_large_batch_scrolls_items_while_actions_remain_visible(page, tmp_path):
     page.locator('#inv-table .inv-select').first.check()
     page.locator('#btn-inventory-add-holdings').click()
     page.wait_for_function('!inventoryHoldingsBusy')
     page.evaluate('''() => {
-      inventoryHoldingsRows = Array.from({length: 100}, (_, i) => ({assetid: String(i), name: 'StatTrak™ USP-S | Ticket to Hell', price: 12.34}));
+      inventoryHoldingsRows = Array.from({length: 100}, (_, i) => ({assetid: String(i), name: 'StatTrak™ USP-S | Ticket to Hell', price: 12.34,
+        market_price: 16.78, market_price_note: 'Steam 历史成交价参考', purchased_at: 1785559200, source: 'buff'}));
       renderInventoryHoldingsRows();
     }''')
     page.wait_for_function("getComputedStyle(document.querySelector('.inventory-holdings-modal')).transform === 'none'")
     table = page.locator('.inventory-holdings-modal .table-container')
     assert table.evaluate('node => node.scrollHeight > node.clientHeight')
+    if page.viewport_size['width'] > 760:
+        assert table.bounding_box()['height'] >= page.viewport_size['height'] * 0.62
+        visible = table.evaluate('''node => {
+          const bounds = node.getBoundingClientRect();
+          return [...node.querySelectorAll('tbody tr')].filter(row => {
+            const box = row.getBoundingClientRect();
+            return box.top >= bounds.top && box.bottom <= bounds.bottom;
+          }).length;
+        }''')
+        assert visible >= 5
     for button in ['inventory-holdings-save', 'inventory-holdings-cancel']:
         box = page.locator('#' + button).bounding_box()
         assert box['y'] >= 0 and box['y'] + box['height'] <= page.viewport_size['height']
+    before = table.bounding_box()['height']
+    page.locator('.inventory-holdings-help summary').click()
+    assert page.locator('.inventory-holdings-help-content').is_visible()
+    assert table.bounding_box()['height'] == before
+    page.locator('.inventory-holdings-help summary').click()
+    page.screenshot(path=str(tmp_path / f'inventory-holdings-expanded-{page.viewport_size["width"]}.png'), animations='disabled')
 
 
 def test_case_cost_choice_survives_sync_and_submits_current_inventory_asset(page):
