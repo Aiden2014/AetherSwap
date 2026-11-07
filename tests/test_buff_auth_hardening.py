@@ -6,8 +6,12 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolated_global_buff_policy(monkeypatch):
+def _isolated_global_buff_policy(monkeypatch, tmp_path):
     import buff
+    from app.services import buff_checkout_guard
+
+    # Authentication checks must never depend on the user's real pending order.
+    monkeypatch.setattr(buff_checkout_guard, "_GUARD_PATH", tmp_path / "checkout.json")
 
     policy = buff.BuffRequestPolicy(
         min_interval=0.0,
@@ -395,6 +399,28 @@ def test_browser_verification_rejects_ok_without_user_info(
     assert verified is False
     assert status == "error"
     assert "用户信息格式异常" in message
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"code": "OK", "data": {"user_info": {"id": "u", "risk_control": False}}}, True),
+    ({"code": "OK", "data": {"user_info": {"id": "u", "name": "captcha"}}}, True),
+    ({"code": "OK", "data": {"user_info": {"id": "u"}, "captcha": None}}, True),
+    ({"code": "OK", "msg": "captcha required", "data": {"user_info": {"id": "u"}}}, False),
+    ({"code": "RISK", "msg": "verification required"}, False),
+    ([{"code": "OK"}], False),
+])
+def test_browser_probe_checks_error_fields_instead_of_json_data(
+    monkeypatch, _isolated_global_buff_policy, payload, expected,
+):
+    from app.services import buff_auth
+
+    monkeypatch.setattr(buff_auth, "detect_buff_challenge", lambda _: "")
+    page = types.SimpleNamespace(evaluate=lambda _: {
+        "status": 200,
+        "url": "https://buff.163.com/account/api/user/info/v2",
+        "body": json.dumps(payload),
+    })
+    assert buff_auth.verify_buff_browser_session(page)[0] is expected
 
 
 @pytest.mark.parametrize("status_code", [403, 412])

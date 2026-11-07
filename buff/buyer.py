@@ -373,6 +373,9 @@ class BuffBuyer:
             # after this account owns the request slot.  Otherwise a waiting
             # writer can retain a token rotated by the preceding response.
             self._sync_session_cookies()
+            # Read endpoints also validate CSRF/session consistency. A token
+            # rotated during checkout must not leave subsequent GETs stale.
+            self.headers["X-Csrftoken"] = self.csrf_token
             h = self.headers.copy()
             if method in _SAFE_METHODS:
                 h.pop("Content-Type", None)
@@ -507,8 +510,11 @@ class BuffBuyer:
                         status_code=status_code,
                     )
                 raise BuffAuthExpired()
-            if _is_verification_required(data) or _is_verification_required(
-                {"message": response_text}
+            # JSON data may contain inactive captcha markup, risk flags and
+            # payment URLs. Only the API's status/error fields describe a
+            # rejected request. Scan raw text only for non-JSON challenge pages.
+            if _is_verification_required(data) or (
+                not json_ok and _is_verification_required({"message": response_text})
             ):
                 msg = (
                     data.get("error")
@@ -1038,6 +1044,7 @@ class BuffBuyer:
                     error.order_id = new_order_id
                     raise error from exc
             pay_type = "wechat" if self.pay_method == PAY_METHOD_WECHAT else "alipay"
+            pay_error = "付款接口未返回有效支付链接"
             try:
                 if self.pay_method == PAY_METHOD_WECHAT:
                     jittered_sleep(0.5)
@@ -1051,6 +1058,10 @@ class BuffBuyer:
                     exc,
                 )
                 pay_url = None
+                pay_error = str(exc) or (
+                    "BUFF 登录状态已失效，请重新验证登录"
+                    if isinstance(exc, BuffAuthExpired) else type(exc).__name__
+                )
             if not isinstance(pay_url, str) or not pay_url.strip():
                 return {
                     "success": False,
@@ -1059,6 +1070,7 @@ class BuffBuyer:
                     "pay_url": None,
                     "pay_type": pay_type,
                     "order_id": new_order_id,
+                    "msg": f"订单已创建，但获取付款链接失败：{pay_error}；请在 BUFF 核对该订单",
                 }
             pay_url = pay_url.strip()
             return {
@@ -1078,29 +1090,34 @@ class BuffBuyer:
             "X-Requested-With": "XMLHttpRequest", 
             "Referer": f"https://buff.163.com/market/buy_order/history?game={game}"
         }
-        try:
-            res = self._make_request("GET", API_PAGE_PAY, params=params, headers=h)
-            if res.get("code") == "OK":
-                data = res.get("data", {})
-                return data.get("elements_v2", {}).get("alipay", {}).get("url") or data.get("elements", {}).get("url") or data.get("url")
-        except (BuffAuthExpired, BuffRequestBlocked):
-            raise
-        except Exception:
-            pass
-        return None
+        res = self._make_request("GET", API_PAGE_PAY, params=params, headers=h)
+        return self._parse_payment_url(res, "alipay")
     def _get_wechat_pay_url(self, game: str, order_id: str) -> Optional[str]:
         params = {"bill_order_id": str(order_id), "_": str(int(time.time() * 1000))}
         h = {"Referer": f"https://buff.163.com/market/buy_order/history?game={game}"}
-        try:
-            res = self._make_request("GET", API_WX_PAY_QRCODE, params=params, headers=h)
-            if res.get("code") == "OK":
-                data = res.get("data", {})
-                return data.get("url") or data.get("elements_v2", {}).get("wechatpay", {}).get("url")
-        except (BuffAuthExpired, BuffRequestBlocked):
-            raise
-        except Exception:
-            pass
-        return None
+        res = self._make_request("GET", API_WX_PAY_QRCODE, params=params, headers=h)
+        return self._parse_payment_url(res, "wechatpay")
+
+    @staticmethod
+    def _parse_payment_url(response: dict, channel: str) -> str:
+        if response.get("code") != "OK":
+            reason = response.get("error") or response.get("msg") or response.get("message")
+            raise ValueError(f"付款接口 code={response.get('code', '未知')}：{reason or '未提供错误说明'}")
+        data = response.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("付款接口 data 格式异常")
+        elements_v2 = data.get("elements_v2")
+        channel_info = elements_v2.get(channel) if isinstance(elements_v2, dict) else None
+        elements = data.get("elements")
+        candidates = [
+            channel_info.get("url") if isinstance(channel_info, dict) else None,
+            elements.get("url") if isinstance(elements, dict) else None,
+            data.get("url"),
+        ]
+        for value in candidates:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        raise ValueError("付款接口返回 OK，但未包含有效支付链接")
     def _fetch_wechat_url(self, game: str, order_id: str) -> None:
         pay_url = self._get_wechat_pay_url(game, order_id)
         if pay_url:

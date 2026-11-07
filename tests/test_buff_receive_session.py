@@ -1,6 +1,13 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolated_checkout_guard(monkeypatch, tmp_path):
+    from app.services import buff_checkout_guard
+
+    monkeypatch.setattr(buff_checkout_guard, "_GUARD_PATH", tmp_path / "checkout.json")
+
+
 def test_buff_trade_poll_uses_shared_client_and_parses_pending_items(monkeypatch):
     from app.receive_flow import fetch_buff_steam_trade
 

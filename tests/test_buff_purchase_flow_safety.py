@@ -1054,6 +1054,7 @@ def test_batch_created_without_pay_url_is_terminal_and_never_falls_back():
 
 
 def test_single_created_without_pay_url_keeps_order_id_and_never_auto_resumes():
+    logs = []
     class BuffClient:
         _pay_method = "alipay"
 
@@ -1073,10 +1074,14 @@ def test_single_created_without_pay_url_keeps_order_id_and_never_auto_resumes():
             BuffClient(),
             _item([{"id": "sell-1", "price": "10.0"}]),
             _config(),
+            log_fn=lambda msg, *_args: logs.append(msg),
             **kwargs,
         )
 
     assert exc_info.value.order_id == "bill-created"
+    assert "verification required while reading payment link" in str(exc_info.value)
+    assert any("已锁单 order_id=bill-created" in msg for msg in logs)
+    assert not any("锁单失败" in msg or "无响应内容" in msg for msg in logs)
     assert purchases == []
 
 

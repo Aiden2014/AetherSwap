@@ -1960,8 +1960,14 @@ def lock_and_confirm_payment(
                 )
             if log_fn:
                 code_str = result.get('code') if result else '未知'
-                msg_str = result.get('msg', '无响应内容') if result else '请求失败或超时'
-                log_fn(f"[Buff]   → 锁单失败 code={code_str} msg={msg_str}", "warn")
+                if attempt.status is _PurchaseAttemptStatus.CREATED_NOT_PAID:
+                    log_fn(
+                        f"[Buff]   → 已锁单 order_id={attempt.order_id}，付款链接获取未完成：{attempt.reason}",
+                        "warn",
+                    )
+                else:
+                    msg_str = (result.get('msg') or attempt.reason) if result else attempt.reason
+                    log_fn(f"[Buff]   → 锁单未完成 code={code_str} msg={msg_str}", "warn")
             return attempt
         order_id = str(result.get("order_id") or "")
         pay_url = str(result.get("pay_url") or "")

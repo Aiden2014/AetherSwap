@@ -1100,7 +1100,10 @@ def test_order_created_payment_lookup_failure_returns_created_pending(pay_respon
         "pay_url": None,
         "pay_type": "alipay",
         "order_id": "order-created",
+        "msg": result["msg"],
     }
+    assert "订单已创建" in result["msg"]
+    assert "无响应内容" not in result["msg"]
     assert [(method, url) for method, url, _ in session.calls] == [
         ("GET", API_USER_INFO),
         ("GET", API_BUY_PREVIEW),

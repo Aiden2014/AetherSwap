@@ -423,23 +423,26 @@ def verify_buff_browser_session(page: Any) -> tuple[bool, str, str]:
         message = "BUFF 在线验证被重定向到安全验证页面"
         _trip_browser_verification(message=message)
         return False, "verification", message
-    if _response_has_challenge(response_body):
-        message = (
-            f"BUFF 在线验证返回安全验证内容（HTTP {status_code or '未知'}）"
-        )
-        _trip_browser_verification(message=message)
-        return False, "verification", message
     if status_code == 401 or any(marker in response_url for marker in ("/login", "/account/login")):
         return False, "expired", "BUFF 登录状态已失效"
 
     try:
         payload = json.loads(response_body)
     except (TypeError, ValueError, json.JSONDecodeError):
+        if _response_has_challenge(response_body):
+            message = f"BUFF 在线验证返回安全验证内容（HTTP {status_code or '未知'}）"
+            _trip_browser_verification(message=message)
+            return False, "verification", message
         return False, "error", f"BUFF 在线验证未返回 JSON（HTTP {status_code or '未知'}）"
+    if not isinstance(payload, dict):
+        return False, "error", "BUFF 在线验证返回 JSON 格式异常"
     code = str(payload.get("code") or "")
-    message = str(payload.get("error") or payload.get("msg") or "")
+    message = str(payload.get("error") or payload.get("msg") or payload.get("message") or "")
     combined = f"{code} {message}".lower()
-    if code.upper() == "OK":
+    from buff.buyer import _is_verification_required
+
+    verification_required = _is_verification_required(payload)
+    if code.upper() == "OK" and not verification_required:
         data = payload.get("data")
         user_info = data.get("user_info") if isinstance(data, dict) else None
         if isinstance(user_info, dict) and user_info:
@@ -458,7 +461,7 @@ def verify_buff_browser_session(page: Any) -> tuple[bool, str, str]:
             rate_limited=True,
         )
         return False, "rate_limited", reason
-    if _response_has_challenge(combined):
+    if verification_required or _response_has_challenge(combined):
         reason = message or f"BUFF 返回安全检查状态: {code}"
         _trip_browser_verification(message=reason)
         return False, "verification", reason
