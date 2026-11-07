@@ -6,6 +6,28 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
+@pytest.mark.parametrize("query_data_object", [False, True])
+def test_current_ssr_script_provides_selected_item_price(query_data_object):
+    import json
+
+    from steam import market_orders
+
+    name = "StatTrak™ USP-S | Ticket to Hell (Field-Tested)"
+    queries = {"queries": [{
+        "queryKey": ["market", "orderbook", 730, name],
+        "state": {"data": {"eCurrency": 23, "rgCompactSellOrders": [158, 2]}},
+    }]}
+    html = "<script type='application/json' id='valve-ssr-data'>" + json.dumps({
+        "renderContext": {"queryData": queries if query_data_object else json.dumps(queries)},
+    }) + "</script>"
+
+    result, error = market_orders._extract_ssr_orderbook_cny(html, market_hash_name=name)
+
+    assert error is None
+    assert result["lowest_price"] == 1.58
+    assert result["sell_orders"] == [(1.58, 2)]
+
+
 def test_新版订单簿支持INR转CNY(monkeypatch):
     from steam import market_orders
 

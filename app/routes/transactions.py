@@ -22,6 +22,7 @@ from app.config_loader import (
     load_app_config_validated,
 )
 from app.shared_market import get_steam_smart_price_cny, batch_fetch_prices
+from steam.client import SteamListingResolutionError
 router = APIRouter()
 STEAM_FEE_FACTOR = 1.15
 
@@ -56,10 +57,24 @@ def _name_from_steam_link(steam_link: str) -> Optional[str]:
     url = (steam_link or "").strip()
     if not url:
         return None
+    cookies = (get_steam_credentials().get("cookies") or "").strip() or None
     pm = get_proxy_manager()
     for attempt in range(3):
         proxies = pm.get_proxies_for_request(failed=(attempt > 0))
-        name = resolve_market_hash_name_from_listing_url(url, proxies=proxies)
+        try:
+            name = resolve_market_hash_name_from_listing_url(
+                url, proxies=proxies, cookies=cookies, raise_on_error=True,
+            )
+        except SteamListingResolutionError as exc:
+            log(
+                f"[Steam市场链接] 解析失败：{exc} "
+                f"(reason={exc.reason}, 登录Cookie={'已配置' if cookies else '未配置'}, "
+                f"代理={'已指定' if proxies else '未指定'})",
+                "warn", category="steam",
+            )
+            if not exc.retryable or attempt == 2:
+                raise
+            continue
         if name:
             return name
     return None
@@ -98,9 +113,19 @@ def api_add_purchase(body: AddPurchaseBody):
     name = (body.name or "").strip()
     steam_link = (body.steam_link or "").strip()
     if steam_link:
-        extracted = _name_from_steam_link(steam_link)
+        try:
+            extracted = _name_from_steam_link(steam_link)
+        except SteamListingResolutionError as exc:
+            if not name:
+                return {"ok": False, "error": str(exc)}
+            extracted = None
         if extracted:
             name = extracted
+        elif not name:
+            return {
+                "ok": False,
+                "error": "无法从 Steam 市场链接确定物品，请检查页面是否正常，并保留完整链接中的磨损和品质筛选参数；也可直接填写完整英文物品名称。",
+            }
     if not name:
         return {"ok": False, "error": "请填写物品名称或有效的 Steam 市场链接"}
     if body.price <= 0:

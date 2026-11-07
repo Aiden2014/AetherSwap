@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
-from steam.client import build_listing_url
+from steam.client import build_listing_url, _extract_ssr_render_context
 from steam.request_policy import steam_market_cooldown
 from utils.delay import jittered_sleep
 from utils.proxy_manager import get_proxy_manager
@@ -105,10 +105,6 @@ _ITEM_NAMEID_PATTERNS = [
     re.compile(r"Market_LoadOrderSpread\s*\(\s*(\d+)\s*\)", re.I),
     re.compile(r"item_nameid['\"]?\s*[:=]\s*['\"]?(\d+)", re.I),
 ]
-_SSR_RENDER_CONTEXT_RE = re.compile(
-    r'window\.SSR\.renderContext=JSON\.parse\("((?:\\.|[^"\\])*)"\);',
-    re.S,
-)
 _CS2_EXTERIOR_FILTER_TAGS = {
     "Factory New": "tag_WearCategory0",
     "Minimal Wear": "tag_WearCategory1",
@@ -167,16 +163,6 @@ def _load_exchange_rates() -> Dict[str, float]:
     _exchange_rate_cache = (now, rates)
     return rates
 
-def _extract_ssr_render_context(html: str) -> Optional[dict]:
-    m = _SSR_RENDER_CONTEXT_RE.search(html or "")
-    if not m:
-        return None
-    try:
-        return json.loads(json.loads(f'"{m.group(1)}"'))
-    except Exception as e:
-        logger.debug("解析 Steam SSR renderContext 失败: %s", type(e).__name__)
-        return None
-
 def _normalize_market_hash_name(value: Any) -> str:
     if not isinstance(value, str):
         return ""
@@ -209,7 +195,9 @@ def _extract_ssr_queries(html: str) -> Tuple[Optional[List[dict]], Optional[str]
     if not ctx:
         return None, "Steam 新版页面未包含 SSR renderContext"
     try:
-        query_data = json.loads(ctx.get("queryData") or "{}")
+        query_data = ctx.get("queryData") or {}
+        if isinstance(query_data, str):
+            query_data = json.loads(query_data)
     except Exception as e:
         return None, f"Steam SSR queryData 解析失败: {type(e).__name__}"
     queries = query_data.get("queries") if isinstance(query_data, dict) else None

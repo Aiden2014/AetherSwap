@@ -1,12 +1,18 @@
 import json
 import os
 import re
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import parse_qs, quote, unquote, urlparse
 import requests
 import urllib3
-from .request_policy import parse_retry_after
-from .session import get_market
+from .request_policy import (
+    SteamMarketCooldownActive,
+    check_steam_market_cooldown,
+    parse_retry_after,
+    steam_market_cooldown,
+)
+from .session import create_steam_session, get_market
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 CURRENCY_CNY = "CNY"
 CURRENCY_USD = "USD"
@@ -16,13 +22,20 @@ DEFAULT_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://steamcommunity.com/market/",
 }
+# Controlled listing requests returned 429 with Chrome/120 and 200 with
+# Chrome/156, including when only User-Agent changed. Extra language,
+# navigation, and client-hint overrides were not needed.
+_LISTING_HEADERS = {
+    **DEFAULT_HEADERS,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
+}
 _LISTING_URL_RE = re.compile(
     r"https?://steamcommunity\.com/market/listings/[^\s\])]+",
     re.I,
 )
 _MARKET_GROUP_ID_RE = re.compile(r"^G[A-Za-z0-9]{8,}$")
 _SSR_RENDER_CONTEXT_RE = re.compile(
-    r'window\.SSR\.renderContext=JSON\.parse\("((?:\\.|[^"\\])*)"\);',
+    r'window\.SSR\.renderContext\s*=\s*JSON\.parse\(\s*"((?:\\.|[^"\\])*)"\s*\)',
     re.S,
 )
 
@@ -58,12 +71,44 @@ def _is_market_group_id(value: str) -> bool:
     return bool(_MARKET_GROUP_ID_RE.fullmatch((value or "").strip()))
 
 
+class _SSRDataParser(HTMLParser):
+    """Read Steam's JSON script without depending on attribute order."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.in_data = False
+        self.chunks: List[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script":
+            self.in_data = dict(attrs).get("id") == "valve-ssr-data"
+
+    def handle_data(self, data):
+        if self.in_data:
+            self.chunks.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "script":
+            self.in_data = False
+
+
 def _extract_ssr_render_context(html: str) -> Optional[dict]:
+    parser = _SSRDataParser()
+    try:
+        parser.feed(html or "")
+        if parser.chunks:
+            data = json.loads("".join(parser.chunks))
+            ctx = data.get("renderContext") if isinstance(data, dict) else None
+            if isinstance(ctx, dict):
+                return ctx
+    except (ValueError, TypeError):
+        pass
     m = _SSR_RENDER_CONTEXT_RE.search(html or "")
     if not m:
         return None
     try:
-        return json.loads(json.loads(f'"{m.group(1)}"'))
+        ctx = json.loads(json.loads(f'"{m.group(1)}"'))
+        return ctx if isinstance(ctx, dict) else None
     except Exception:
         return None
 
@@ -73,7 +118,9 @@ def _extract_ssr_queries(html: str) -> List[dict]:
     if not ctx:
         return []
     try:
-        query_data = json.loads(ctx.get("queryData") or "{}")
+        query_data = ctx.get("queryData") or {}
+        if isinstance(query_data, str):
+            query_data = json.loads(query_data)
     except Exception:
         return []
     queries = query_data.get("queries") if isinstance(query_data, dict) else None
@@ -125,7 +172,7 @@ def _description_matches_filters(data: Dict[str, Any], filter_groups: List[set])
 def _description_market_hash_name(data: Any) -> str:
     if not isinstance(data, dict):
         return ""
-    name = data.get("market_hash_name") or data.get("market_name") or ""
+    name = data.get("market_hash_name") or ""
     return name.strip() if isinstance(name, str) else ""
 
 
@@ -134,24 +181,40 @@ def _extract_group_market_hash_name(html: str, source_url: str = "") -> Optional
     if not queries:
         return None
     filter_groups = _extract_category_filters(source_url) if source_url else []
-    descriptions: List[str] = []
+    parsed = _parse_listing_url(source_url) if source_url else None
+    app_id, group_id = parsed if parsed else (None, None)
+    descriptions: set = set()
+    orderbooks: set = set()
     for query in queries:
         if not isinstance(query, dict):
             continue
-        data = (query.get("state") or {}).get("data")
+        key = query.get("queryKey")
+        if not isinstance(key, list) or len(key) < 4 or key[0] != "market":
+            continue
+        if app_id is not None and str(key[2]) != str(app_id):
+            continue
+        orderbook_name = _extract_market_query_name(key, "orderbook")
+        if orderbook_name and not _is_market_group_id(orderbook_name):
+            orderbooks.add(orderbook_name)
+        if key[1] != "description":
+            continue
+        state = query.get("state")
+        data = state.get("data") if isinstance(state, dict) else None
         name = _description_market_hash_name(data)
         if not name or _is_market_group_id(name):
             continue
-        descriptions.append(name)
-        if isinstance(data, dict) and _description_matches_filters(data, filter_groups):
-            return name
-    for query in queries:
-        if not isinstance(query, dict):
+        if group_id and data.get("market_bucket_group_id") not in (None, "", group_id):
             continue
-        name = _extract_market_query_name(query.get("queryKey"), "orderbook")
-        if name and not _is_market_group_id(name):
-            return name
-    return descriptions[0] if descriptions else None
+        if not filter_groups or _description_matches_filters(data, filter_groups):
+            descriptions.add(name)
+    if filter_groups:
+        candidates = descriptions
+    else:
+        candidates = orderbooks or descriptions
+    selected = candidates.intersection(orderbooks)
+    if len(selected) == 1:
+        return next(iter(selected))
+    return next(iter(candidates)) if len(candidates) == 1 else None
 
 
 def _extract_line1(html: str) -> Optional[list]:
@@ -215,40 +278,106 @@ def market_hash_name_from_listing_url(url: str) -> Optional[str]:
     return name
 
 
+class SteamListingResolutionError(Exception):
+    """A safe, user-facing reason a listing URL could not be resolved."""
+
+    def __init__(self, reason: str, *, status_code=None, retry_after=None):
+        self.reason = reason
+        self.status_code = status_code
+        self.retry_after = retry_after
+        self.retryable = reason in {"timeout", "network_error"} or (
+            reason == "http_error" and (status_code == 408 or status_code >= 500)
+        )
+        messages = {
+            "invalid_url": "Steam 市场链接格式无效，请粘贴完整的 steamcommunity.com/market/listings/... 链接。",
+            "rate_limited": "Steam 市场请求被限流（HTTP 429），暂时无法读取饰品数据；这不代表未选择磨损或品质，请稍后重试。",
+            "cooldown_active": "Steam 市场处于限流冷却中，本次未发送请求，请稍后重试。",
+            "timeout": "读取 Steam 市场页面超时，请检查网络或代理后重试。",
+            "network_error": "无法连接 Steam 市场，请检查网络或代理后重试。",
+            "http_error": f"Steam 市场页面请求失败（HTTP {status_code}），请稍后重试。",
+            "item_not_resolved": "Steam 页面返回的数据无法确定所选物品。请确认页面能正常打开，并保留完整链接中的磨损和品质筛选参数；也可直接填写完整英文物品名称。",
+        }
+        message = messages[reason]
+        if reason in {"rate_limited", "cooldown_active"} and retry_after is not None:
+            message += f" 剩余约 {retry_after:.0f} 秒。"
+        super().__init__(message)
+
+
 def resolve_market_hash_name_from_listing_url(
     url: str,
     *,
     timeout: int = 15,
     session=None,
     proxies: Optional[dict] = None,
+    cookies: Optional[Union[dict, str]] = None,
+    raise_on_error: bool = False,
 ) -> Optional[str]:
-    parsed = _parse_listing_url(url)
-    if not parsed:
-        return None
-    _, name = parsed
-    if not _is_market_group_id(name):
-        return name
-    request_url = _coerce_listing_url(url)
-    client = session or requests.Session()
-    headers = {**DEFAULT_HEADERS, "Referer": request_url}
-    kwargs = {
-        "headers": headers,
-        "timeout": timeout,
-        "proxies": proxies,
-        "allow_redirects": True,
-        "verify": False,
-    }
+    client = None
     try:
+        parsed = _parse_listing_url(url)
+        if not parsed:
+            raise SteamListingResolutionError("invalid_url")
+        _, name = parsed
+        if not _is_market_group_id(name):
+            return name
+        check_steam_market_cooldown()
+        request_url = _coerce_listing_url(url)
+        client = session or create_steam_session()
+        headers = {
+            **_LISTING_HEADERS,
+            "Referer": request_url,
+        }
+        kwargs = {
+            "headers": headers,
+            "timeout": timeout,
+            "proxies": proxies,
+            "allow_redirects": True,
+            "verify": False,
+        }
+        if cookies:
+            kwargs["cookies"] = _parse_cookie_str(cookies) if isinstance(cookies, str) else cookies
         try:
             resp = client.get(request_url, **kwargs)
         except TypeError:
             kwargs.pop("verify", None)
             resp = client.get(request_url, **kwargs)
-        if getattr(resp, "status_code", None) != 200:
-            return None
-        return _extract_group_market_hash_name(getattr(resp, "text", "") or "", request_url)
-    except Exception:
+        if resp.status_code == 429:
+            retry_after = (getattr(resp, "headers", {}) or {}).get("Retry-After")
+            remaining = steam_market_cooldown.defer(retry_after)
+            raise SteamListingResolutionError(
+                "rate_limited", status_code=429,
+                retry_after=remaining,
+            )
+        if resp.status_code != 200:
+            raise SteamListingResolutionError("http_error", status_code=resp.status_code)
+        steam_market_cooldown.record_success()
+        name = _extract_group_market_hash_name(getattr(resp, "text", "") or "", request_url)
+        if not name:
+            raise SteamListingResolutionError("item_not_resolved")
+        return name
+    except SteamListingResolutionError:
+        if raise_on_error:
+            raise
         return None
+    except SteamMarketCooldownActive as exc:
+        if raise_on_error:
+            raise SteamListingResolutionError("cooldown_active", retry_after=exc.retry_after) from None
+        return None
+    except requests.Timeout:
+        if raise_on_error:
+            raise SteamListingResolutionError("timeout") from None
+        return None
+    except requests.RequestException:
+        if raise_on_error:
+            raise SteamListingResolutionError("network_error") from None
+        return None
+    except Exception:
+        if raise_on_error:
+            raise SteamListingResolutionError("item_not_resolved") from None
+        return None
+    finally:
+        if client is not None and session is None:
+            client.close()
 def _parse_cookie_str(s: str) -> dict:
     out = {}
     for part in (s or "").split(";"):
