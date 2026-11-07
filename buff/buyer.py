@@ -638,6 +638,27 @@ class BuffBuyer:
         except Exception:
             return None
 
+    def get_bill_orders(self, order_ids: list, game: str = "csgo") -> Optional[list]:
+        """Read exact bill IDs; never infer receipt from a missing order."""
+        ids = list(dict.fromkeys(
+            value for raw in order_ids
+            if (value := _normalize_server_identifier(raw))
+        ))
+        if not ids:
+            return []
+        response = self._make_request(
+            "GET", API_BILL_ORDER_INFO,
+            params={"bill_orders": ",".join(ids), "game": game,
+                    "_": str(int(time.time() * 1000))},
+            headers={"Referer": f"https://buff.163.com/market/buy_order/history?game={game}"},
+        )
+        data = response.get("data")
+        items = data.get("items") if isinstance(data, dict) else None
+        if response.get("code") != "OK" or not isinstance(items, list):
+            return None
+        return [item for item in items if isinstance(item, dict)
+                and _normalize_server_identifier(item.get("id")) in ids]
+
     def is_order_paid(self, order_id: str, game: str = "csgo") -> bool:
         """Read this bill only, using the current BUFF cashier's state rules.
 

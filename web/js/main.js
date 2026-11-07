@@ -118,7 +118,7 @@ async function refreshStatus() {
     if (top) top.textContent = statusText;
     const inline = el("status-text-inline");
     if (inline) inline.textContent = statusText;
-    const stepLabels = { STEAM_COOLDOWN: "等待 Steam 市场恢复", STEAM_RATE_LIMITED: "Steam 持续限流，任务已停止" };
+    const stepLabels = { STEAM_COOLDOWN: "等待 Steam 市场恢复", STEAM_RATE_LIMITED: "Steam 持续限流，任务已停止", SYNCING_RECEIPTS: "正在同步收货状态" };
     const stepDesc = stepLabels[d.step] || d.step || "";
     const item = d.progress_item || "";
     const newText = stepDesc && item ? `${stepDesc}：${item}` : (stepDesc || item || "—");

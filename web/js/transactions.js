@@ -130,7 +130,8 @@ function renderPurchaseHistoryTable(tbody, list, resellRatio = 0.85, multiSelect
     const mp = t.market_price != null ? Number(t.market_price).toFixed(2) : "—";
     const sold = t.sale_price != null && Number(t.sale_price) > 0;
     const listingError = t.listing_status === "error";
-    const statusStr = t.pending_receipt ? "待收货" : sold ? "已出售" : listingError ? "ERROR" : t.listing ? "出售中" : "持有中";
+    const receivedUnmatched = t.pending_receipt === false && !t.assetid && (t.buff_order_id || t.bill_order_id);
+    const statusStr = t.pending_receipt ? "待收货" : sold ? "已出售" : listingError ? "ERROR" : t.listing ? "出售中" : receivedUnmatched ? "已收货（库存待匹配）" : "持有中";
     const statusCellClass = t.pending_receipt ? "status-pending" : sold ? "status-sold" : listingError ? "status-error" : t.listing ? "status-listing" : "status-holding";
     const salePriceStr = sold ? Number(t.sale_price).toFixed(2) : "—";
     let discountRatioStr = "—", cashProfitStr = "—", selfUseStr = "—", discountRatioClass = "";

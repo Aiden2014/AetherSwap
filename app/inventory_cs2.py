@@ -70,11 +70,19 @@ def scan_cs2_inventory() -> Tuple[bool, List[Dict[str, Any]], str]:
         cd_text, cd_ts = _parse_cooldown(owner_desc)
         can_trade = tradable == 1 and (not cd_ts or now >= cd_ts)
         can_sell = marketable == 1 and can_trade
+        properties = {
+            str(prop.get("propertyid")): prop
+            for prop in (asset.get("asset_properties") or []) if isinstance(prop, dict)
+        }
         items.append(
             {
                 "name": name,
                 "market_hash_name": market_hash_name,
                 "assetid": str(asset.get("assetid", "")),
+                "classid": cid,
+                "instanceid": iid,
+                "paintwear": (properties.get("2") or {}).get("float_value"),
+                "paintseed": (properties.get("1") or {}).get("int_value"),
                 "appid": int(asset.get("appid", CS2_APP_ID)),
                 "contextid": str(asset.get("contextid", "")),
                 "marketable": marketable,

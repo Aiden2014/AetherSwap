@@ -278,6 +278,9 @@ def _process_deals_for_target(
         bought += 1
         ctx.set_status("running", "CHECKOUT_PENDING", progress_done=bought, progress_item=chosen.get("name", ""))
         ctx.log(f"已确认付款 本笔={paid:.2f} 累计={acc:.2f}/{target}", "info", category="buff")
+        sync_receipts = getattr(ctx, "sync_receipts", None)
+        if callable(sync_receipts):
+            sync_receipts()
         if acc >= target:
             break
         ctx.debug("下一件将重新按 SteamDT 顺序试稳定性")
@@ -363,6 +366,43 @@ def _run_pipeline(config: dict) -> None:
     analyzer = StabilityAnalyzer(usd_to_cny=USD_TO_CNY_DEFAULT)
     buyer = create_buff_client_from_config(cred_buff, cfg)
     failed_goods_ids_ttl: dict = {}
+    last_receipt_sync = float("-inf")
+
+    def sync_receipts_at_checkpoint() -> None:
+        nonlocal last_receipt_sync
+        from app.config_loader import get_steam_credentials
+        from app.inventory_cs2 import scan_cs2_inventory
+        from app.receipt_sync import sync_received_purchases
+
+        interval = max(10, int(pipeline_cfg.get("receive_poll_interval_seconds", 30) or 30))
+        if time.monotonic() - last_receipt_sync < interval or get_unresolved_checkout() is not None:
+            return
+        last_receipt_sync = time.monotonic()
+        previous = None
+        progress = {}
+        try:
+            previous = state.get_status()
+            progress = {key: previous[key] for key in (
+                "progress_total", "progress_done", "progress_item", "next_progress_item"
+            ) if key in previous}
+            ctx.set_status("running", "SYNCING_RECEIPTS", **progress)
+            sync_received_purchases(
+                buyer, state.get_purchases, state.update_purchase_by_id,
+                str((get_steam_credentials() or {}).get("steam_id") or ""),
+                game=(cfg.get("buff") or {}).get("game", "csgo"),
+                scan_inventory=scan_cs2_inventory,
+                log_fn=lambda message, level: ctx.log(message, level, category="receive"),
+                pipeline_checkpoint=True,
+            )
+        except (BuffAuthExpired, BuffRequestBlocked):
+            raise
+        except Exception as exc:
+            ctx.log(f"收货同步暂时失败 ({type(exc).__name__})，稍后重试", "warn", category="receive")
+        finally:
+            if previous is not None:
+                ctx.set_status("running", previous.get("step", ""), **progress)
+
+    ctx.receipt_sync_hook = sync_receipts_at_checkpoint
 
     while True:
         if ctx.is_stop_requested():
@@ -605,6 +645,22 @@ def _run_pipeline_guarded(config: dict) -> None:
     global _pipeline_thread
     try:
         _run_pipeline(config)
+    except (BuffAuthExpired, BuffRequestBlocked) as exc:
+        # Receipt checkpoints also run in retry/schedule waits, outside the
+        # purchase loop's request-policy handlers.
+        state = get_state()
+        if isinstance(exc, BuffAuthExpired):
+            state.set_buff_auth_expired(True)
+            step = "BUFF_AUTH_EXPIRED"
+        elif isinstance(exc, BuffRateLimited):
+            step = "BUFF_RATE_LIMITED"
+        elif isinstance(exc, BuffVerificationRequired):
+            state.set_buff_verification_required(True, str(exc))
+            step = "BUFF_VERIFICATION_REQUIRED"
+        else:
+            step = "BUFF_REQUEST_BLOCKED"
+        state.log(f"BUFF 收货检查或购买请求已暂停 ({type(exc).__name__})", "warn", category="buff")
+        state.set_status("error", step)
     except Exception as exc:
         state = get_state()
         state.set_pending_payment(None)

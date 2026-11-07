@@ -88,6 +88,16 @@ def _fetch_full_context(
             return None
         current_assets = data.get("assets") or []
         current_descs = data.get("descriptions") or []
+        # Steam returns per-item wear/seed separately from descriptions. Keep
+        # these tied to the exact asset and context across pagination.
+        properties = {
+            (str(row.get("contextid")), str(row.get("assetid"))): row.get("asset_properties")
+            for row in (data.get("asset_properties") or []) if isinstance(row, dict)
+        }
+        for asset in current_assets:
+            props = properties.get((str(asset.get("contextid")), str(asset.get("assetid"))))
+            if isinstance(props, list):
+                asset["asset_properties"] = props
         if not current_assets:
             break
         all_assets.extend(current_assets)

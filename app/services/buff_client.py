@@ -201,6 +201,9 @@ class BuffClient:
     def get_steam_trades(self) -> Optional[list]:
         return self._run(lambda buyer: buyer.get_steam_trades())
 
+    def get_bill_orders(self, order_ids: List[str], game: str = "csgo") -> Optional[list]:
+        return self._run(lambda buyer: buyer.get_bill_orders(order_ids, game))
+
     def is_order_paid(self, order_id: str, game: str = "csgo") -> bool:
         return self._run(lambda buyer: buyer.is_order_paid(order_id, game))
 

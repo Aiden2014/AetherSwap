@@ -17,11 +17,11 @@ MARKET_HEADERS = {
 
 
 class _MarketReadAdapter(requests.adapters.HTTPAdapter):
-    """Use curl_cffi Chrome impersonation for Steam market GET requests."""
+    """Use curl_cffi Chrome impersonation for Steam market/inventory reads."""
 
     _READ_PREFIXES = (
         "/market/listings/", "/market/pricehistory/", "/market/itemordershistogram",
-        "/market/orderbook", "/market/mylistings/", "/market/myhistory/",
+        "/market/orderbook", "/market/mylistings/", "/market/myhistory/", "/inventory/",
     )
 
     @classmethod
@@ -109,6 +109,7 @@ def create_steam_session(*, verify: bool = False) -> requests.Session:
     session = _SteamSession()
     session.verify = verify
     session.mount("https://steamcommunity.com/market", _MarketReadAdapter())
+    session.mount("https://steamcommunity.com/inventory/", _MarketReadAdapter())
     return session
 
 

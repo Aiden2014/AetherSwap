@@ -260,6 +260,7 @@ def _buff_background_request_is_safe() -> bool:
 
 def receive_worker() -> None:
     from app.receive_flow import try_receive_once
+    from app.receipt_sync import needs_receipt_sync, sync_received_purchases
     from app.services.buff_auth import get_buff_auth_lock
     from app.services.buff_client import create_buff_client_from_config
     from app.services.buff_checkout_guard import buff_activity_guard
@@ -290,7 +291,8 @@ def receive_worker() -> None:
                         continue
                     purchases = get_purchases()
                     if not any(
-                        p.get("pending_receipt") and not p.get("assetid")
+                        (p.get("pending_receipt") and not p.get("assetid"))
+                        or needs_receipt_sync(p)
                         for p in purchases
                     ):
                         continue
@@ -302,6 +304,13 @@ def receive_worker() -> None:
                             credentials,
                             cfg,
                         )
+                    sync_received_purchases(
+                        buff_client, get_purchases, update_purchase_by_id,
+                        str((get_steam_credentials() or {}).get("steam_id") or ""),
+                        game=(cfg.get("buff") or {}).get("game", "csgo"),
+                        scan_inventory=scan_cs2_inventory,
+                        log_fn=lambda message, level: log(message, level, category="receive"),
+                    )
                     n = try_receive_once(
                         get_purchases,
                         update_purchase,
