@@ -72,6 +72,70 @@ def test_ambiguous_name_only_match_is_rejected():
     )
 
 
+def test_known_bills_never_fall_back_to_product_or_oldest_purchase():
+    rows = [
+        {"_db_id":1, "buff_order_id":"bill-old", "goods_id":42, "name":ITEM_NAME, "at":1},
+        {"_db_id":2, "buff_order_id":"bill-new", "goods_id":42, "name":ITEM_NAME, "at":2},
+        {"_db_id":3, "goods_id":42, "name":ITEM_NAME, "at":0},
+    ]
+    incoming = {"goods_id":42,"market_hash_name":ITEM_NAME}
+    assert receive_flow._match_purchase_for_item(incoming, rows, set()) is None
+    incoming["buff_order_id"] = "bill-new"
+    assert receive_flow._match_purchase_for_item(incoming, rows, set())["_db_id"] == 2
+    incoming["buff_order_id"] = "unknown-bill"
+    assert receive_flow._match_purchase_for_item(incoming, rows, set()) is None
+
+
+def test_later_purchase_delivered_first_updates_its_exact_bill(monkeypatch):
+    rows = [
+        {"_db_id":1,"buff_order_id":"bill-old","goods_id":42,"name":ITEM_NAME,"at":1,"pending_receipt":True},
+        {"_db_id":2,"buff_order_id":"bill-new","goods_id":42,"name":ITEM_NAME,"at":2,"pending_receipt":True},
+    ]
+    orders = [
+        {"id":"bill-old","goods_id":42,"buyer_steamid":"7656","state":"TO_DELIVER", "tradeofferid":"other-offer",
+         "asset_info":{"assetid":"seller-old","classid":"100","paintwear":"0.1"}},
+        {"id":"bill-new","goods_id":42,"buyer_steamid":"7656","state":"TO_DELIVER", "tradeofferid":"new-offer",
+         "asset_info":{"assetid":"seller-new","classid":"100","paintwear":"0.25"}},
+    ]
+    client = type("Client", (), {"get_bill_orders":lambda _self, ids: [o for o in orders if o["id"] in ids]})()
+    task = {"tradeofferid":"new-offer", "items":[{
+        "assetid":"seller-new","goods_id":42,"market_hash_name":ITEM_NAME,
+    }]}
+    monkeypatch.setattr(receive_flow,"fetch_buff_steam_trade",lambda _client:(True,[task],""))
+    accepted=[]
+    monkeypatch.setattr(receive_flow,"accept_steam_trade_offer",lambda offer,_cookies:accepted.append(offer) or True)
+    monkeypatch.setattr(receive_flow,"jittered_sleep",lambda *_a:None)
+
+    def scan():
+        items = ([{"assetid":"receiver-new","classid":"100","paintwear":"0.25","market_hash_name":ITEM_NAME}]
+                 if accepted else [])
+        return True,items,""
+
+    def update(db_id, patch):
+        next(p for p in rows if p["_db_id"] == db_id).update(patch)
+        return True
+
+    received=receive_flow.try_receive_once(
+        lambda:[dict(row) for row in rows],lambda *_a:False,lambda:client,
+        lambda:{"steam_id":"7656","cookies":"steamLoginSecure=secure; sessionid=session"},
+        scan_inventory=scan,update_purchase_by_id=update,
+    )
+    assert received == 1
+    assert accepted == ["new-offer"]
+    assert rows[0]["pending_receipt"] is True
+    assert not rows[0].get("assetid")
+    assert rows[1]["pending_receipt"] is False
+    assert rows[1]["assetid"] == "receiver-new"
+
+
+def test_offer_bill_index_rejects_wrong_account_and_duplicate_references():
+    valid={"id":"bill","goods_id":42,"buyer_steamid":"7656","state":"TO_DELIVER",
+           "tradeofferid":"offer","asset_info":{"assetid":"seller"}}
+    assert receive_flow._offer_bill_items([dict(valid,buyer_steamid="other")],"7656") == {}
+    assert receive_flow._offer_bill_items([dict(valid,state="SUCCESS")],"7656") == {}
+    assert len(receive_flow._offer_bill_items([valid,valid],"7656")[("offer","seller")]) == 2
+
+
 def test_partial_inventory_visibility_never_persists_seller_assetid(
     monkeypatch,
 ):

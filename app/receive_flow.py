@@ -165,10 +165,8 @@ def _match_purchase_for_item(
     assigned_db_ids: set,
 ) -> Optional[dict]:
     """Return the best matching purchase record dict (containing _db_id), or None.
-    Matching priority:
-      1. goods_id exact match (most reliable)
-      2. one unique, exact name match when either goods_id is unavailable
-    Among candidates, prefer the oldest (smallest ``at`` timestamp).
+    Known BUFF bills require an exact bill reference resolved from the offer.
+    Goods/name matching is retained only for legacy rows without bill IDs.
     """
     goods_id_buff = item.get("goods_id")
     try:
@@ -178,6 +176,25 @@ def _match_purchase_for_item(
     except (ValueError, TypeError):
         normalized_goods_id = None
     name_for_match = (item.get("market_hash_name") or item.get("name") or "").strip()
+    bill_id = str(item.get("buff_order_id") or item.get("bill_order_id") or "").strip()
+    if bill_id:
+        matches = [p for p in pending_purchases
+                   if p.get("_db_id") and p["_db_id"] not in assigned_db_ids
+                   and not p.get("assetid")
+                   and str(p.get("buff_order_id") or p.get("bill_order_id") or "").strip() == bill_id]
+        if len(matches) != 1:
+            return None
+        matched = matches[0]
+        if (normalized_goods_id is None or str(matched.get("goods_id")) != str(normalized_goods_id)
+                or not name_for_match or (matched.get("name") or "").strip() != name_for_match):
+            return None
+        return matched
+    if any((p.get("buff_order_id") or p.get("bill_order_id"))
+           and str(p.get("goods_id")) == str(normalized_goods_id)
+           for p in pending_purchases):
+        # A known bill for this product must be resolved before considering
+        # a generic legacy record as a substitute for it.
+        return None
     exact_candidates: List[dict] = []
     name_candidates: List[dict] = []
     for p in pending_purchases:
@@ -185,6 +202,10 @@ def _match_purchase_for_item(
         if not db_id or db_id in assigned_db_ids:
             continue
         if p.get("assetid"):  
+            continue
+        if p.get("buff_order_id") or p.get("bill_order_id"):
+            # Matching the same product is not proof that this offer belongs
+            # to this bill: two purchases may be delivered out of order.
             continue
         try:
             purchase_goods_id = (
@@ -211,6 +232,26 @@ def _match_purchase_for_item(
     if len(name_candidates) != 1:
         return None
     return name_candidates[0]
+
+
+def _offer_bill_items(orders: list, steam_id: str) -> dict:
+    """Index only explicit offer + seller-asset references for our account."""
+    index = {}
+    for order in orders:
+        if (not isinstance(order, dict) or not steam_id
+                or str(order.get("buyer_steamid") or "") != str(steam_id)
+                or order.get("state") not in {"TO_DELIVER", "DELIVERING"}
+                or str(order.get("progress")) in {"104", "105", "106"}):
+            continue
+        asset = order.get("asset_info") or {}
+        if not isinstance(asset, dict):
+            continue
+        offer = str(order.get("tradeofferid") or "").strip()
+        asset_id = str(asset.get("assetid") or "").strip()
+        bill = str(order.get("id") or "").strip()
+        if offer and asset_id and bill and order.get("goods_id"):
+            index.setdefault((offer, asset_id), []).append(order)
+    return index
 def try_receive_once(
     get_purchases: Callable[[], List[dict]],
     update_purchase: Callable[[int, dict], bool],
@@ -245,6 +286,23 @@ def try_receive_once(
     ok, pending_tasks, err = fetch_buff_steam_trade(buff_client)
     if not ok or not pending_tasks:
         return 0
+    bill_ids = list(dict.fromkeys(
+        str(p.get("buff_order_id") or p.get("bill_order_id"))
+        for p in pending_records if p.get("buff_order_id") or p.get("bill_order_id")
+    ))
+    bill_items = {}
+    if bill_ids:
+        query_bills = getattr(buff_client, "get_bill_orders", None)
+        orders = []
+        if callable(query_bills):
+            for offset in range(0, len(bill_ids), 50):
+                batch = bill_ids[offset:offset + 50]
+                result = query_bills(batch)
+                if not isinstance(result, list):
+                    return 0
+                orders.extend(order for order in result if isinstance(order, dict)
+                              and str(order.get("id") or "") in batch)
+        bill_items = _offer_bill_items(orders, str(steam_cred.get("steam_id") or ""))
     pending_tasks = sorted(pending_tasks, key=lambda t: (t.get("created_at") or 0, t.get("tradeofferid") or ""))
     received = 0
     def _do_update(db_id: int, positional_idx: int, data: dict) -> bool:
@@ -268,7 +326,21 @@ def try_receive_once(
         assigned_db_ids: set = set()
         pairs: List[Tuple[dict, dict]] = []
         task_items = task.get("items") or []
-        for it in task_items:
+        for original_item in task_items:
+            it = dict(original_item)
+            orders_for_item = bill_items.get((str(offer_id), str(it.get("assetid") or "")), [])
+            if len(orders_for_item) == 1:
+                order = orders_for_item[0]
+                if str(it.get("goods_id")) != str(order.get("goods_id")):
+                    continue
+                it["buff_order_id"] = str(order["id"])
+                asset = order.get("asset_info") or {}
+                it["paintwear"] = asset.get("paintwear")
+                it["classid"] = asset.get("classid")
+            elif orders_for_item:
+                # Duplicate or conflicting bill references cannot authorize
+                # acceptance even if an unrelated legacy row has this name.
+                continue
             matched = _match_purchase_for_item(
                 it,
                 pending_records,
@@ -349,7 +421,25 @@ def try_receive_once(
             mhn = (it.get("market_hash_name") or "").strip()
             our_assetid = None
             if mhn and inv_by_name.get(mhn):
-                for inv_item in inv_by_name[mhn][:]:
+                from app.receipt_sync import _wear_identity
+
+                identity = _wear_identity(mhn, it)
+                available = [inv for inv in inv_by_name[mhn]
+                             if str(inv.get("assetid") or "") not in already_used]
+                if it.get("buff_order_id"):
+                    # Within a received offer, identical names also cannot be
+                    # assigned to bills arbitrarily. Keep ambiguity pending.
+                    same_identity = sum(
+                        _wear_identity((item.get("market_hash_name") or "").strip(), item) == identity
+                        for _, item in pairs
+                    )
+                    available = [inv for inv in available if
+                                 str(inv.get("assetid")) == str(it.get("assetid"))
+                                 or (identity is not None and same_identity == 1
+                                     and _wear_identity(mhn, inv) == identity)]
+                    if len(available) != 1:
+                        available = []
+                for inv_item in available:
                     aid = str(inv_item.get("assetid") or "")
                     if aid in already_used:
                         continue
