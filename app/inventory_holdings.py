@@ -1,5 +1,6 @@
 """Match inventory assets to completed BUFF purchases without guessing by name."""
 import math
+import time
 from decimal import Decimal, InvalidOperation
 
 
@@ -9,6 +10,22 @@ def positive_price(value):
         return price if math.isfinite(price) and price > 0 else None
     except (ValueError, TypeError, OverflowError):
         return None
+
+
+def buff_purchase_reference(order):
+    """Prefer payment time; delivery can happen much later than the purchase."""
+    purchased_at = None
+    for field in ("buyer_pay_time", "transact_time"):
+        try:
+            value = float(order.get(field))
+            if value > 1e12:
+                value /= 1000
+            if math.isfinite(value) and 946684800 <= value <= time.time() + 60:
+                purchased_at = value
+                break
+        except (ValueError, TypeError, OverflowError):
+            pass
+    return {"purchase_id": str(order["id"]), "purchased_at": purchased_at}
 
 
 def _fingerprint(item):
@@ -110,5 +127,10 @@ def buff_commodity_prices(items, orders, steam_id):
             "price": choices[0]["price"] if len(choices) == 1 else None,
             "source": "buff_same_price" if len(choices) == 1 else "buff_choices",
             "price_candidates": choices,
+            "purchase_candidates": [
+                {**buff_purchase_reference(row), "price": positive_price(row["price"])}
+                for row in rows
+            ],
+            **(buff_purchase_reference(rows[0]) if len(rows) == 1 else {}),
         }
     return result

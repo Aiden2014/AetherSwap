@@ -1500,7 +1500,7 @@ textarea.app-modal-input {
 
 .inventory-holdings-modal {
   width: calc(100vw - 48px);
-  max-width: 960px;
+  max-width: 1140px;
   max-height: calc(100dvh - 48px);
   display: flex;
   flex-direction: column;
@@ -1531,8 +1531,9 @@ textarea.app-modal-input {
 }
 
 #inventory-holdings-table th:nth-child(2) { width: 164px; }
-#inventory-holdings-table th:nth-child(3) { width: 160px; }
-#inventory-holdings-table th:nth-child(4) { width: 156px; }
+#inventory-holdings-table th:nth-child(3) { width: 150px; }
+#inventory-holdings-table th:nth-child(4) { width: 168px; }
+#inventory-holdings-table th:nth-child(5) { width: 166px; }
 
 #inventory-holdings-table .inv-holding-name {
   line-height: 1.6;
@@ -1576,9 +1577,25 @@ textarea.app-modal-input {
 }
 
 #inventory-holdings-table .inv-holding-price,
+#inventory-holdings-table .inv-holding-market-price,
+#inventory-holdings-table .inv-holding-purchase-choice,
 #inventory-holdings-table .inv-holding-price-choice {
   width: 100%;
   min-width: 0;
+}
+
+#inventory-holdings-table .inv-holding-purchase-choice {
+  margin-top: 8px;
+  padding: 8px;
+  font-size: 12px;
+}
+
+.inv-holding-market-note,
+.inv-holding-date {
+  display: block;
+  margin-top: 6px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 #inventory-holdings-table .inv-holding-price-choice {
@@ -1633,6 +1650,7 @@ textarea.app-modal-input {
   }
 
   #inventory-holdings-table .inv-holding-name,
+  #inventory-holdings-table .inv-holding-source-cell,
   #inventory-holdings-table .inv-holding-assetid {
     grid-column: 1 / -1;
   }

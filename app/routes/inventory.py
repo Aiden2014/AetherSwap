@@ -18,6 +18,8 @@ class InventoryPurchasePreview(BaseModel):
 class InventoryPurchaseItem(BaseModel):
     assetid: str
     price: Optional[float] = None
+    market_price: Optional[float] = Field(default=None, ge=0.01, allow_inf_nan=False)
+    purchased_at: Optional[float] = Field(default=None, ge=946684800, allow_inf_nan=False)
 
 
 class InventoryPurchaseImport(BaseModel):
@@ -35,7 +37,7 @@ def _selected_inventory(assetids):
 @router.post("/api/inventory/holdings/preview")
 def api_inventory_holdings_preview(body: InventoryPurchasePreview):
     from app.state import get_purchases
-    from app.inventory_holdings import match_buff_purchases, positive_price, buff_commodity_prices
+    from app.inventory_holdings import match_buff_purchases, positive_price, buff_commodity_prices, buff_purchase_reference
     from buff import BuffAuthExpired, BuffRateLimited, BuffVerificationRequired, BuffRequestBlocked
     from buff.buyer import BuffPurchaseHistoryError
     from requests.exceptions import RequestException
@@ -92,14 +94,20 @@ def api_inventory_holdings_preview(body: InventoryPurchasePreview):
     preview = []
     for item in items:
         assetid = str(item["assetid"])
-        cost = {"price": None, "source": "manual", "price_candidates": []}
+        cost = {"price": None, "source": "manual", "price_candidates": [],
+                "purchase_candidates": [], "purchased_at": None, "market_price": None}
         if assetid in matches:
             cost.update(price=positive_price(matches[assetid].get("price")), source="buff")
+            cost.update(buff_purchase_reference(matches[assetid]))
         elif assetid in commodity_prices:
             cost.update(commodity_prices[assetid])
         preview.append({"assetid": assetid, "name": item.get("name") or item.get("market_hash_name"),
                         "exists": assetid in existing, **cost})
-    return {"ok": True, "warning": warning, "items": preview}
+    from app.purchase_market import enrich_purchase_market_prices
+    market_warning = enrich_purchase_market_prices(preview, {
+        str(item["assetid"]): item.get("market_hash_name") or item.get("name") for item in items
+    })
+    return {"ok": True, "warning": "；".join(filter(None, [warning, market_warning])), "items": preview}
 
 
 @router.post("/api/inventory/holdings")
@@ -113,7 +121,8 @@ def api_inventory_add_holdings(body: InventoryPurchaseImport):
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     existing = {str(p.get("assetid") or "").strip() for p in get_purchases()}
-    prices = {row.assetid.strip(): positive_price(row.price) for row in body.items}
+    submitted = {row.assetid.strip(): row for row in body.items}
+    prices = {assetid: positive_price(row.price) for assetid, row in submitted.items()}
     records = []
     for item in items:
         assetid = str(item["assetid"])
@@ -122,8 +131,12 @@ def api_inventory_add_holdings(body: InventoryPurchaseImport):
         name = item.get("market_hash_name") or item.get("name")
         if not name:
             return {"ok": False, "error": "库存物品缺少名称，请刷新库存"}
+        details = submitted[assetid]
+        if details.purchased_at and details.purchased_at > time.time() + 60:
+            return {"ok": False, "error": "购买时间不能晚于当前时间"}
         records.append({"assetid": assetid, "name": name, "price": prices[assetid] or 0,
-                        "at": time.time(), "pending_receipt": False})
+                        "at": details.purchased_at or time.time(), "pending_receipt": False,
+                        "market_price": positive_price(details.market_price)})
     try:
         result = db_import_inventory_purchases(records)
     except ValueError as exc:

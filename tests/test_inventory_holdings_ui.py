@@ -276,3 +276,76 @@ def test_capsule_reference_is_labelled_and_manual_edits_override_case_choices(pa
     page.locator('.inv-holding-price').nth(1).fill('3.00')
     assert page.locator('.inv-holding-price-choice').input_value() == ''
     assert page.locator('.inv-holding-source').nth(1).inner_text() == '手动填写'
+
+
+def test_historical_market_price_and_original_purchase_time_are_imported(page):
+    page.evaluate('''() => {
+      const original = fetchJson;
+      fetchJson = (url, options) => url.endsWith('/preview') ? Promise.resolve({ok: true, items: [
+        {assetid: '111', name: 'Test Item', source: 'buff', price: 12.34, purchased_at: 1785559200,
+         market_price: 16.78, market_price_note: 'Steam 历史成交价参考'},
+      ]}) : original(url, options);
+    }''')
+    page.locator('#inv-table .inv-select').first.check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-market-price').input_value() == '16.78'
+    assert '历史成交价' in page.locator('.inv-holding-market-note').inner_text()
+    assert '2026' in page.locator('.inv-holding-date').inner_text()
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [
+        {'assetid': '111', 'price': 12.34, 'market_price': 16.78, 'purchased_at': 1785559200}]
+
+
+def test_same_cost_different_dates_require_record_selection_and_preserve_manual_market_override(page):
+    page.evaluate('''() => {
+      const original = fetchJson;
+      fetchJson = (url, options) => url.endsWith('/preview') ? Promise.resolve({ok: true, items: [
+        {assetid: '111', name: 'Antwerp 2022 Contenders Autograph Capsule', source: 'buff_same_price', price: 2.8,
+         price_candidates: [{price: 2.8, count: 2}], purchase_candidates: [
+           {purchase_id: 'first', price: 2.8, purchased_at: 1785559200, market_price: 4.5, market_price_note: 'Steam 历史成交价参考'},
+           {purchase_id: 'second', price: 2.8, purchased_at: 1785645600, market_price: 5.5, market_price_note: 'Steam 历史成交价参考'},
+         ]},
+      ]}) : original(url, options);
+    }''')
+    page.locator('#inv-table .inv-select').first.check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-market-price').input_value() == ''
+    assert '选择购买记录' in page.locator('.inv-holding-market-note').inner_text()
+    choice = page.locator('.inv-holding-purchase-choice')
+    choice.select_option('first')
+    assert page.locator('.inv-holding-market-price').input_value() == '4.50'
+    choice.select_option('second')
+    assert page.locator('.inv-holding-market-price').input_value() == '5.50'
+    choice.select_option('')
+    assert page.locator('.inv-holding-market-price').input_value() == ''
+    assert page.locator('.inv-holding-date').count() == 0
+    choice.select_option('second')
+    page.locator('.inv-holding-market-price').fill('6.25')
+    page.locator('#inventory-holdings-sync').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert choice.input_value() == 'second'
+    assert page.locator('.inv-holding-market-price').input_value() == '6.25'
+    assert page.locator('.inv-holding-market-note').inner_text() == '手动填写'
+    assert choice.evaluate('node => node.getBoundingClientRect().width <= node.parentElement.clientWidth')
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [
+        {'assetid': '111', 'price': 2.8, 'market_price': 6.25, 'purchased_at': 1785645600}]
+
+
+def test_market_price_can_be_cleared_and_invalid_values_block_import(page):
+    page.locator('#inv-table .inv-select').first.check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    price = page.locator('.inv-holding-market-price')
+    price.fill('-1')
+    page.locator('#inventory-holdings-save').click()
+    assert page.evaluate('savedImports.length') == 0
+    assert '有效购入市场价' in page.locator('#inventory-holdings-status').inner_text()
+    price.fill('')
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [{'assetid': '111', 'price': 12.34}]

@@ -215,7 +215,11 @@ def test_capsules_with_new_asset_ids_prefill_common_price_without_claiming_exact
     assert match_buff_purchases(items, orders, '7656') == {}
     result = buff_commodity_prices(items, orders, '7656')
     assert set(result) == {'new', 'another-new'}
-    assert result['new'] == {'price': 2.8, 'source': 'buff_same_price', 'price_candidates': [{'price': 2.8, 'count': 2}]}
+    assert result['new']['price'] == 2.8
+    assert result['new']['source'] == 'buff_same_price'
+    assert result['new']['price_candidates'] == [{'price': 2.8, 'count': 2}]
+    assert len(result['new']['purchase_candidates']) == 2
+    assert not result['new'].get('purchased_at')
 
 
 def test_cases_with_multiple_costs_offer_choices_instead_of_an_arbitrary_price():
@@ -264,3 +268,55 @@ def test_preview_exposes_commodity_prices_and_exact_matches_take_precedence(clie
     assert result['items'][1]['source'] == 'buff_choices'
     assert result['items'][1]['price'] is None
     assert len(result['items'][1]['price_candidates']) == 2
+
+
+def test_import_stores_purchase_time_and_market_price_without_overwriting_duplicates(client, db):
+    db.db_append_purchase({'assetid': '456', 'name': NAME, 'price': 7, 'market_price': 8, 'at': 100})
+    result = client.post('/api/inventory/holdings', json={'items': [
+        {'assetid': '123', 'price': 12.34, 'market_price': 16.78, 'purchased_at': 1700000000},
+        {'assetid': '456', 'price': 99, 'market_price': 100, 'purchased_at': 1700000000},
+    ]}).json()
+    assert result['ok'] and result['skipped'] == ['456']
+    records = {row['assetid']: row for row in db.db_get_purchases()}
+    assert records['123']['market_price'] == 16.78
+    assert records['123']['at'] == 1700000000
+    assert records['456']['market_price'] == 8 and records['456']['at'] == 100
+
+
+def test_import_rejects_future_purchase_time_without_writing(client, db):
+    import time
+    result = client.post('/api/inventory/holdings', json={'items': [
+        {'assetid': '123', 'price': 1, 'purchased_at': time.time() + 3600},
+    ]}).json()
+    assert result['ok'] is False
+    assert db.db_get_purchases() == []
+
+
+def test_preview_links_dated_orders_to_history_with_one_request_per_product(client, monkeypatch):
+    from app import config_loader
+    from app.services import buff_client, steam_client
+    import datetime
+    paid = datetime.datetime(2026, 8, 1, 2, tzinfo=datetime.timezone.utc).timestamp()
+    creds = lambda: {'steam_id': '7656', 'cookies': 'mock'}
+    monkeypatch.setattr(config_loader, 'get_buff_credentials', creds)
+    monkeypatch.setattr(config_loader, 'get_steam_credentials', creds)
+    monkeypatch.setattr(inventory, 'get_steam_credentials', creds)
+    monkeypatch.setattr(inventory, 'load_app_config_validated', lambda: {})
+    monkeypatch.setattr(inventory, 'get_inventory', lambda: [commodity_item('123'), commodity_item('456')])
+    remote = Mock()
+    remote.get_purchase_history_page.return_value = {'items': [
+        commodity_order('one', buyer_pay_time=paid, transact_time=paid + 86400),
+        commodity_order('two', buyer_pay_time=paid - 86400),
+    ], 'total_page': 1}
+    monkeypatch.setattr(buff_client, 'create_buff_client_from_config', lambda *args: remote)
+    fetch = Mock(return_value={'currency': 'CNY', 'history': [
+        ['Jul 31 2026 01: +0', 3.5, '3'], ['Aug 01 2026 01: +0', 4.5, '5'],
+    ]})
+    monkeypatch.setattr(steam_client.SteamClient, 'fetch_history', fetch)
+    rows = client.post('/api/inventory/holdings/preview', json={'assetids': ['123', '456']}).json()['items']
+    assert all(row['market_price'] is None and row['purchased_at'] is None for row in rows)
+    for row in rows:
+        first, second = row['purchase_candidates']
+        assert first['purchased_at'] == paid and first['market_price'] == 4.5
+        assert second['market_price'] == 3.5
+    fetch.assert_called_once_with('Fracture Case', return_currency=True)
