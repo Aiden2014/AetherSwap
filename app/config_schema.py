@@ -16,6 +16,7 @@ DEFAULTS = {
     },
     "buff": {
         "pay_method": "alipay",
+        "pay_methods": [],  # Empty until legacy pay_method is migrated.
         "game": "csgo",
         "price_tolerance": 0.5,
     },
@@ -148,6 +149,22 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return default
+def payment_methods(buff: dict) -> list[str]:
+    """Enabled external payment methods, in preference order."""
+    methods = buff.get("pay_methods")
+    ordered = []
+    if isinstance(methods, list):
+        for method in methods:
+            name = method.strip().lower() if isinstance(method, str) else ""
+            if name in ("alipay", "wechat") and name not in ordered:
+                ordered.append(name)
+    if not ordered:
+        legacy = buff.get("pay_method")
+        legacy = legacy.strip().lower() if isinstance(legacy, str) else "alipay"
+        ordered = [legacy if legacy in ("alipay", "wechat") else "alipay"]
+    return ordered
+
+
 def _validate_ranges(cfg: dict) -> dict:
     # 简单校验一下，防止用户乱填配置搞崩程序
     import warnings
@@ -156,6 +173,9 @@ def _validate_ranges(cfg: dict) -> dict:
     buff = cfg.get("buff") or {}
     inv = cfg.get("inventory") or {}
     system = cfg.get("system") or {}
+    buff["pay_methods"] = payment_methods(buff)
+    buff["pay_method"] = buff["pay_methods"][0]
+    cfg["buff"] = buff
 
     if isinstance(pipe.get("max_discount"), (int, float)):
         v = pipe["max_discount"]

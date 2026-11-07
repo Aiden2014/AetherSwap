@@ -244,6 +244,7 @@ class BuffBuyer:
         pay_method: int = PAY_METHOD_ALIPAY,
         use_ssl: bool = True,
         *,
+        pay_methods: Optional[list] = None,
         user_agent: Optional[str] = None,
         session: Optional[requests.Session] = None,
         request_policy: Optional[BuffRequestPolicy] = None,
@@ -254,6 +255,7 @@ class BuffBuyer:
         self.cookies_dict = _parse_cookies(cookie_str)
         self.csrf_token = _csrf(self.cookies_dict)
         self.pay_method = pay_method
+        self.pay_methods = tuple(pay_methods) if pay_methods else (pay_method,)
         self.use_ssl = use_ssl
         self.session = session if session is not None else requests.Session()
         self._owns_session = session is None
@@ -863,18 +865,28 @@ class BuffBuyer:
         pay_methods = preview_data.get("pay_methods")
         if not isinstance(pay_methods, list):
             return "BUFF 购买预检未返回支付方式"
+        preferences = getattr(self, "pay_methods", (self.pay_method,))
+        available = next(
+            (method for method in preferences for item in pay_methods
+             if isinstance(item, dict) and str(item.get("value")) == str(method)
+             and item.get("btn_clickable") is True and not item.get("error")),
+            None,
+        )
+        if available is not None:
+            self.pay_method = available
+            return ""
         selected = next(
             (
                 item
                 for item in pay_methods
                 if isinstance(item, dict)
-                and str(item.get("value")) == str(self.pay_method)
+                and str(item.get("value")) in {str(method) for method in preferences}
             ),
             None,
         )
         if selected is None:
             return f"BUFF 购买预检不支持当前支付方式 {self.pay_method}"
-        if selected.get("btn_clickable") is not True:
+        if selected.get("btn_clickable") is not True or selected.get("error"):
             return str(
                 selected.get("error")
                 or selected.get("btn_text")
@@ -1257,6 +1269,22 @@ class BuffBuyer:
         except (InvalidOperation, TypeError, ValueError) as exc:
             raise BuffRequestBlocked("BUFF 批量价格无效，未发送购买请求") from exc
 
+    @staticmethod
+    def _batch_payment_error(payment: dict) -> str:
+        if payment.get("btn_clickable") is not True or payment.get("error"):
+            return str(payment.get("error") or "BUFF 批量付款选项不可用")
+        if payment.get("free_password") not in (True, "true"):
+            return "批量付款需要在 BUFF 官网完成支付密码确认"
+        if payment.get("sub_pay") or payment.get("ejzb_auth"):
+            return "批量付款需要额外授权或组合支付，请在 BUFF 官网处理"
+        try:
+            fee = Decimal(str(payment.get("pay_fee_rate", 0)))
+        except InvalidOperation:
+            fee = Decimal("NaN")
+        if not fee.is_finite() or fee != 0:
+            return "批量付款包含未计入预算的手续费，请在 BUFF 官网确认"
+        return ""
+
     def prepare_batch_buy(
         self, goods_id: int, game: str, orders: list, max_price: float, num: int,
     ) -> dict:
@@ -1321,25 +1349,21 @@ class BuffBuyer:
         methods = [method for method in methods if isinstance(method, dict)]
         # The website prefunds only these external WeChat/Alipay methods.
         # Single-checkout Alipay 51 must not be sent to batch_buy/create.
-        supported = (6,) if self.pay_method == PAY_METHOD_WECHAT else (49, 10)
+        preferences = getattr(self, "pay_methods", (self.pay_method,))
+        supported = tuple(value for method in preferences
+                          for value in ((6,) if method == PAY_METHOD_WECHAT else (49, 10)))
         candidates = [method for value in supported for method in methods
                       if str(method.get("value")) == str(value)]
         payment = next((method for method in candidates
-                        if method.get("btn_clickable") is True and not method.get("error")), None)
+                        if not self._batch_payment_error(method)), None)
         if payment is None:
+            clickable = next((method for method in candidates
+                              if method.get("btn_clickable") is True and not method.get("error")), None)
+            if clickable is not None:
+                return rejected(self._batch_payment_error(clickable))
             details = "; ".join(str(method.get("error") or method.get("name")
                                      or method.get("value")) for method in (candidates or methods))
             return rejected(f"BUFF 未提供当前支付方式的批量付款选项: {details}")
-        if payment.get("free_password") not in (True, "true"):
-            return rejected("批量付款需要在 BUFF 官网完成支付密码确认")
-        if payment.get("sub_pay") or payment.get("ejzb_auth"):
-            return rejected("批量付款需要额外授权或组合支付，请在 BUFF 官网处理")
-        try:
-            fee = Decimal(str(payment.get("pay_fee_rate", 0)))
-        except InvalidOperation:
-            fee = Decimal("NaN")
-        if not fee.is_finite() or fee != 0:
-            return rejected("批量付款包含未计入预算的手续费，请在 BUFF 官网确认")
         self._batch_quote = {
             "game": game, "goods_id": goods_id, "steamid": self.steam_id,
             "orders": selected, "max_price": ceiling, "total": total,
@@ -1348,6 +1372,7 @@ class BuffBuyer:
             "hide_non_epay": any(method.get("collapse") for method in methods),
             "prepared_at": time.monotonic(),
         }
+        self.pay_method = PAY_METHOD_WECHAT if int(payment["value"]) == 6 else PAY_METHOD_ALIPAY
         return {"success": True, "created": False, "total_price": float(total)}
 
     def batch_buy_create(

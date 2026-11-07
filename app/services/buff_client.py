@@ -4,6 +4,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from app.services.buff_auth import get_buff_auth_lock
+from app.config_schema import payment_methods
 from buff import (
     BuffBuyer,
     BuffWriteResultUnknown,
@@ -65,12 +66,14 @@ class BuffClient:
         pay_method: str = "alipay",
         timeout_sec: int = buff_timeout,
         *,
+        pay_methods: Optional[List[str]] = None,
         user_agent: Optional[str] = None,
         credential_generation: int = 0,
         credentials_provider: Optional[Callable[[], dict]] = None,
         credentials_update_callback: Optional[Callable[[str, str], None]] = None,
     ) -> None:
-        self._pay_method = (pay_method or "alipay").strip().lower()
+        self._pay_methods = payment_methods({"pay_methods": pay_methods, "pay_method": pay_method})
+        self._pay_method = self._pay_methods[0]
         self._pay_method_id = (
             PAY_METHOD_WECHAT if self._pay_method == "wechat" else PAY_METHOD_ALIPAY
         )
@@ -96,6 +99,8 @@ class BuffClient:
         return BuffBuyer(
             cookies,
             pay_method=self._pay_method_id,
+            pay_methods=[PAY_METHOD_WECHAT if method == "wechat" else PAY_METHOD_ALIPAY
+                         for method in self._pay_methods],
             user_agent=user_agent,
             account_id=BUFF_ACCOUNT_ID,
             request_timeout=self._timeout,
@@ -440,6 +445,7 @@ def create_buff_client_from_config(credentials: dict, config: dict) -> BuffClien
     return BuffClient(
         str(credentials.get("cookies") or ""),
         pay_method=buff_cfg.get("pay_method", "alipay"),
+        pay_methods=buff_cfg.get("pay_methods"),
         timeout_sec=buff_timeout,
         user_agent=str(credentials.get("user_agent") or "").strip() or None,
         credential_generation=credentials.get("generation", 0),

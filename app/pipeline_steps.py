@@ -2104,7 +2104,9 @@ def lock_and_confirm_payment(
             or buff_cfg.get("pay_method")
             or "alipay"
         ).strip().lower()
-        if configured_pay_method not in getattr(buff_client, "batch_pay_methods", ("wechat",)):
+        configured_pay_methods = getattr(buff_client, "_pay_methods", None) or [configured_pay_method]
+        if not any(method in getattr(buff_client, "batch_pay_methods", ("wechat",))
+                   for method in configured_pay_methods):
             return _PurchaseAttempt(
                 _PurchaseAttemptStatus.SAFE_TO_FALLBACK,
                 reason="当前支付方式不支持批量购买，且尚未发送写请求",

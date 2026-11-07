@@ -25,6 +25,22 @@ function browserTimezoneLabel(timezone = detectBrowserTimezone()) {
     : "UTC offset unavailable";
   return timezone.name ? `${timezone.name} (${offsetLabel})` : offsetLabel;
 }
+function syncPaymentPriority() {
+  const priority = el("cfg-pay-priority");
+  if (!priority) return;
+  const selected = ["alipay", "wechat"].filter(method => el(`cfg-pay-${method}`)?.checked);
+  priority.disabled = selected.length !== 2;
+  if (selected.length === 1) priority.value = selected[0];
+}
+
+function paymentMethodsFromForm() {
+  if (!el("cfg-pay-alipay") || !el("cfg-pay-wechat")) return undefined;
+  const selected = ["alipay", "wechat"].filter(method => el(`cfg-pay-${method}`).checked);
+  if (!selected.length) throw new Error("请至少选择一种支付方式（支付宝或微信）");
+  const preferred = el("cfg-pay-priority")?.value;
+  return selected.includes(preferred) ? [preferred, ...selected.filter(method => method !== preferred)] : selected;
+}
+
 async function loadConfig() {
   const d = await fetchJson(API + "/config");
   const c = d.config || {};
@@ -46,8 +62,14 @@ async function loadConfig() {
   if (gMaxPrice) gMaxPrice.value = i.max_price ?? "";
   const gMinVolume = el("cfg-min_volume");
   if (gMinVolume) gMinVolume.value = i.min_volume ?? "";
-  const gPay = el("cfg-pay_method");
-  if (gPay) gPay.value = (b.pay_method || "wechat").toLowerCase();
+  const payMethods = b.pay_methods?.length ? b.pay_methods : [(b.pay_method || "alipay").toLowerCase()];
+  ["alipay", "wechat"].forEach(method => {
+    const checkbox = el(`cfg-pay-${method}`);
+    if (checkbox) checkbox.checked = payMethods.includes(method);
+  });
+  const payPriority = el("cfg-pay-priority");
+  if (payPriority) payPriority.value = payMethods[0];
+  syncPaymentPriority();
   const gTarget = el("cfg-target_balance");
   if (gTarget) gTarget.value = p.target_balance ?? "";
   const gMaxDisc = el("cfg-max_discount");
@@ -194,6 +216,7 @@ async function loadConfig() {
 
 function formToConfig() {
   const browserTimezone = detectBrowserTimezone();
+  const payMethods = paymentMethodsFromForm();
   const readNumberInput = (id) => {
     const node = el(id);
     if (!node) return undefined;
@@ -216,7 +239,8 @@ function formToConfig() {
       min_volume: readIntInput("cfg-min_volume"),
     },
     buff: {
-      pay_method: el("cfg-pay_method") ? el("cfg-pay_method").value : undefined,
+      pay_methods: payMethods,
+      pay_method: payMethods?.[0],
       game: el("cfg-buff-game") ? el("cfg-buff-game").value.trim() : undefined,
       price_tolerance: el("cfg-price_tolerance") ? parseFloat(el("cfg-price_tolerance").value) || undefined : undefined,
     },

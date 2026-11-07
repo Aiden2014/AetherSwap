@@ -81,6 +81,41 @@ def _start_batch(buyer, **kwargs):
     )
 
 
+@pytest.mark.parametrize("preferences,preferred_patch,expected", [
+    ((49, 6), {}, 49),
+    ((6, 49), {}, 6),
+    ((49, 6), {"btn_clickable": False}, 6),
+    ((6, 49), {"error": "unavailable"}, 49),
+    ((49, 6), {"free_password": False}, 6),
+    ((49, 6), {"pay_fee_rate": 0.01}, 6),
+    ((49, 6), {"sub_pay": {"value": 59}}, 6),
+])
+def test_batch_payment_preferences_use_actual_selected_channel(monkeypatch, preferences, preferred_patch, expected):
+    buyer, calls, responses = _batch_buyer(monkeypatch, pay_method=preferences[0])
+    buyer.pay_methods = preferences
+    base = responses["preview"]["data"]["pay_methods"][0]
+    methods = [dict(base, value=value) for value in reversed(preferences)]
+    next(method for method in methods if method["value"] == preferences[0]).update(preferred_patch)
+    responses["preview"]["data"]["pay_methods"] = methods
+    result = _start_batch(buyer)
+    assert result["success"]
+    assert result["pay_type"] == ("wechat" if expected == 6 else "alipay")
+    assert calls[1][1] == "create" and calls[1][2]["pay_method"] == expected
+    assert calls[2][1] == ("wx_pay_qrcode" if expected == 6 else "page_pay")
+
+
+def test_batch_failure_after_creation_does_not_switch_payment_method(monkeypatch):
+    buyer, calls, responses = _batch_buyer(monkeypatch, pay_method=49, advertised_method=49)
+    buyer.pay_methods = (49, 6)
+    responses["preview"]["data"]["pay_methods"].append(
+        dict(responses["preview"]["data"]["pay_methods"][0], value=6))
+    responses["page_pay"] = BuffRequestBlocked("payment unavailable")
+    result = _start_batch(buyer)
+    assert result["created"] and not result["success"]
+    assert result["pay_type"] == "alipay"
+    assert [call[1] for call in calls] == ["preview", "create", "page_pay"]
+
+
 @pytest.mark.parametrize(("configured", "advertised", "pay_type"),
                          [(PAY_METHOD_WECHAT, 6, "wechat"),
                           (PAY_METHOD_ALIPAY, 49, "alipay"),

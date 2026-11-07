@@ -94,5 +94,8 @@ def update_app_config_validated(patch: dict) -> dict:
     with _config_update_lock:
         current = load_app_config_validated()
         updated = merge(current, patch if isinstance(patch, dict) else {})
+        buff_patch = patch.get("buff") if isinstance(patch, dict) else None
+        if isinstance(buff_patch, dict) and "pay_method" in buff_patch and "pay_methods" not in buff_patch:
+            updated["buff"]["pay_methods"] = []
         save_app_config_validated(updated)
         return load_app_config_validated()

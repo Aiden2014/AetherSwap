@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/variables.css" />
   <link rel="stylesheet" href="/css/base.css" />
   <link rel="stylesheet" href="/css/layout.css?v=2" />
-  <link rel="stylesheet" href="/css/components.css?v=7" />
+  <link rel="stylesheet" href="/css/components.css?v=8" />
   <link rel="stylesheet" href="/css/animations.css" />
   <style>
     /* Nav badge */
@@ -826,11 +826,20 @@
             <h2>Buff 支付</h2>
             <div class="form-grid">
               <div class="field">
-                <label for="cfg-pay_method">支付方式</label>
-                <select id="cfg-pay_method">
-                  <option value="alipay">支付宝 (Alipay)</option>
-                  <option value="wechat">微信 (WeChat)</option>
+                <label>支付方式（可多选）</label>
+                <div class="payment-method-options" role="group" aria-label="支持的支付方式">
+                  <label class="checkbox-wrapper"><input type="checkbox" id="cfg-pay-alipay" onchange="syncPaymentPriority()" /><span>支付宝</span></label>
+                  <label class="checkbox-wrapper"><input type="checkbox" id="cfg-pay-wechat" onchange="syncPaymentPriority()" /><span>微信</span></label>
+                </div>
+                <span class="field-hint">至少选择一种。下单时按优先顺序选择该订单支持的支付方式。</span>
+              </div>
+              <div class="field">
+                <label for="cfg-pay-priority">支付优先级</label>
+                <select id="cfg-pay-priority">
+                  <option value="alipay">优先支付宝，其次微信</option>
+                  <option value="wechat">优先微信，其次支付宝</option>
                 </select>
+                <span class="field-hint">同时勾选两种方式时可设置优先级。</span>
               </div>
             </div>
           </div>
@@ -1820,7 +1829,7 @@
   <script src="/js/console.js"></script>
   <script src="/js/steamGuard.js"></script>
   <script src="/js/transactions.js"></script>
-  <script src="/js/settings.js?v=2"></script>
+  <script src="/js/settings.js?v=3"></script>
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
   <script src="/js/main.js?v=6"></script>

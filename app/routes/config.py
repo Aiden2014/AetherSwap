@@ -1,7 +1,7 @@
 """Config, data init, export/import, holdings report routes."""
 from typing import Optional
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 from app.state import (
     clear_transactions,
@@ -45,6 +45,13 @@ def api_get_config(response: Response):
     return {"config": load_app_config_validated()}
 @router.post("/api/config")
 def api_save_config(body: ConfigBody):
+    buff = body.config.get("buff")
+    if isinstance(buff, dict) and "pay_methods" in buff:
+        methods = buff["pay_methods"]
+        if (not isinstance(methods, list) or not methods
+                or any(not isinstance(method, str) or method not in ("alipay", "wechat") for method in methods)
+                or len(set(methods)) != len(methods)):
+            raise HTTPException(status_code=400, detail="请至少选择一种支付方式，且仅支持不重复的支付宝和微信")
     saved = update_app_config_validated(body.config)
     return {"ok": True, "config": saved}
 def _api_data_init_unlocked():
