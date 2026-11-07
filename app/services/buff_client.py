@@ -201,6 +201,12 @@ class BuffClient:
     def get_steam_trades(self) -> Optional[list]:
         return self._run(lambda buyer: buyer.get_steam_trades())
 
+    def is_order_paid(self, order_id: str, game: str = "csgo") -> bool:
+        return self._run(lambda buyer: buyer.is_order_paid(order_id, game))
+
+    def is_batch_paid(self, batch_id: str, game: str = "csgo") -> bool:
+        return self._run(lambda buyer: buyer.is_batch_paid(batch_id, game))
+
     def get_goods_steam_price_cny(
         self, search_name: str, game: str = "csgo"
     ) -> Optional[float]:

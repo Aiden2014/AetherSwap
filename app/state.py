@@ -3,7 +3,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, List, Optional
+from typing import Any, Callable, Deque, List, Optional
 from app.database import (
     db_append_purchase,
     db_append_sale,
@@ -19,6 +19,8 @@ from app.database import (
     db_update_sale,
 )
 _LOG_MAXLEN = 500
+PAYMENT_POLL_INTERVAL_SECONDS = 5.0
+PAYMENT_POLL_TIMEOUT_SECONDS = 300.0
 class State:
     _lock: threading.Lock
     _confirm: threading.Condition
@@ -151,29 +153,50 @@ class State:
                 out = [e for e in out if e.get("id", 0) > since_idx]
             return out
     def set_pending_payment(self, p: Optional[dict]) -> None:
-        with self._lock:
-            self._pending_payment = p
+        with self._confirm:
+            if p is not None:
+                self._user_confirmed = None
+            with self._lock:
+                self._pending_payment = p
     def get_pending_payment(self) -> Optional[dict]:
         with self._lock:
             return self._pending_payment
-    def wait_payment_confirm(self, timeout_seconds: Optional[float] = None) -> bool:
-        with self._confirm:
-            self._user_confirmed = None
-            deadline = (time.time() + timeout_seconds) if timeout_seconds is not None else None
-            while True:
+    def wait_payment_confirm(
+        self, timeout_seconds: Optional[float] = None,
+        payment_checker: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        # Run reads on the checkout thread so the existing BUFF authentication
+        # lock remains reentrant. Never hold the condition during network I/O.
+        if payment_checker is not None:
+            timeout_seconds = min(
+                timeout_seconds if timeout_seconds is not None else PAYMENT_POLL_TIMEOUT_SECONDS,
+                PAYMENT_POLL_TIMEOUT_SECONDS,
+            )
+        deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+        next_poll = time.monotonic()
+        paid = False
+        while True:
+            with self._confirm:
                 if self._user_confirmed is not None:
                     return self._user_confirmed is True
                 if self._stop_requested:
                     return False
-                if deadline is not None and time.time() >= deadline:
+                if paid:
+                    return True
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
                     return False
+                should_poll = payment_checker is not None and now >= next_poll
                 wait_time = 1.0
                 if deadline is not None:
-                    remaining = deadline - time.time()
-                    if remaining <= 0:
-                        return False
-                    wait_time = min(1.0, remaining)
-                self._confirm.wait(timeout=wait_time)
+                    wait_time = min(wait_time, deadline - now)
+                if payment_checker is not None and not should_poll:
+                    wait_time = min(wait_time, next_poll - now)
+                if not should_poll:
+                    self._confirm.wait(timeout=wait_time)
+                    continue
+            paid = payment_checker() is True
+            next_poll = time.monotonic() + PAYMENT_POLL_INTERVAL_SECONDS
     def confirm_payment(self, ok: bool) -> None:
         with self._confirm:
             self._user_confirmed = ok
@@ -249,8 +272,13 @@ def set_pending_payment(p: Optional[dict]) -> None:
     get_state().set_pending_payment(p)
 def get_pending_payment() -> Optional[dict]:
     return get_state().get_pending_payment()
-def wait_payment_confirm(timeout_seconds: Optional[float] = None) -> bool:
-    return get_state().wait_payment_confirm(timeout_seconds=timeout_seconds)
+def wait_payment_confirm(
+    timeout_seconds: Optional[float] = None,
+    payment_checker: Optional[Callable[[], bool]] = None,
+) -> bool:
+    return get_state().wait_payment_confirm(
+        timeout_seconds=timeout_seconds, payment_checker=payment_checker,
+    )
 def confirm_payment(ok: bool) -> None:
     get_state().confirm_payment(ok)
 def request_stop() -> None:

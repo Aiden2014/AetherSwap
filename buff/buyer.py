@@ -186,6 +186,7 @@ API_BUY_PREVIEW = "https://buff.163.com/api/market/goods/buy/preview"
 API_BUY = "https://buff.163.com/api/market/goods/buy"
 API_PAGE_PAY = "https://buff.163.com/api/market/bill_order/page_pay"
 API_WX_PAY_QRCODE = "https://buff.163.com/api/market/bill_order/wx_pay_qrcode"
+API_BILL_ORDER_INFO = "https://buff.163.com/api/market/bill_order/batch/info"
 API_BATCH_WX_PAY_QRCODE = "https://buff.163.com/api/market/goods/batch_buy/wx_pay_qrcode"
 API_BATCH_PREVIEW = "https://buff.163.com/api/market/goods/batch_buy/preview"
 API_BATCH_CREATE = "https://buff.163.com/api/market/goods/batch_buy/create"
@@ -636,6 +637,50 @@ class BuffBuyer:
             raise
         except Exception:
             return None
+
+    def is_order_paid(self, order_id: str, game: str = "csgo") -> bool:
+        """Read this bill only, using the current BUFF cashier's state rules.
+
+        Refund/error progress 105/106 also closes BUFF's cashier, but must not
+        be recorded here as a purchased item.
+        """
+        order_id = _normalize_server_identifier(order_id)
+        if not order_id:
+            return False
+        response = self._make_request(
+            "GET", API_BILL_ORDER_INFO,
+            params={"bill_orders": order_id, "game": game,
+                    "_": str(int(time.time() * 1000))},
+            headers={"Referer": f"https://buff.163.com/market/buy_order/history?game={game}"},
+        )
+        data = response.get("data")
+        items = data.get("items") if isinstance(data, dict) else None
+        if response.get("code") != "OK" or not isinstance(items, list) or len(items) != 1:
+            return False
+        item = items[0]
+        if not isinstance(item, dict) or _normalize_server_identifier(item.get("id")) != order_id:
+            return False
+        state = item.get("state")
+        mode, progress = str(item.get("mode")), str(item.get("progress"))
+        if state == "FAIL" or progress in {"104", "105", "106"}:
+            return False
+        return (state == "SUCCESS"
+                or (mode in {"2", "5"} and state == "TO_DELIVER")
+                or (mode in {"5", "8"} and progress in {"305", "309"})
+                or (mode == "7" and progress == "202"))
+
+    def is_batch_paid(self, batch_id: str, game: str = "csgo") -> bool:
+        context = self._require_batch_context(batch_id)
+        if context["game"] != game:
+            raise BuffRequestBlocked("BUFF 批次与当前游戏不匹配")
+        response = self._make_request(
+            "GET", API_BATCH_CHECK_STATE,
+            params={"batch_buy_id": str(batch_id), "_": str(int(time.time() * 1000))},
+            headers={"Referer": f"https://buff.163.com/goods/{context['goods_id']}?from=market"},
+        )
+        data = response.get("data")
+        return (response.get("code") == "OK" and isinstance(data, dict)
+                and str(data.get("state")) == "2")
 
     def check_wait_pay_orders(self, game: str = "csgo") -> bool:
         params = {

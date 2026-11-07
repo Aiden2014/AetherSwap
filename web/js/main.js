@@ -159,6 +159,13 @@ async function refreshStatus() {
       }
       const t = el("pay-type");
       if (t) t.textContent = p.name ? "订单: " + p.name : "";
+      const autoStatus = el("pay-auto-status");
+      if (autoStatus) {
+        const remaining = Math.max(0, Math.ceil((p.auto_check_until || 0) - Date.now() / 1000));
+        autoStatus.textContent = p.auto_check_until
+          ? (remaining > 0 ? `每 5 秒自动检查付款结果，剩余 ${remaining} 秒；支付后无需手动确认` : "自动检查已结束，请核对 BUFF 订单状态")
+          : "支付后请确认已完成支付";
+      }
       box.dataset.payUrl = p.pay_url;
       const qrWrap = el("pay-qrcode-wrap");
       const qrBox = el("pay-qrcode");

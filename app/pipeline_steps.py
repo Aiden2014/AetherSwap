@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.services.iflow_client import fetch_iflow_rows as _fetch_iflow_rows
-from app.state import get_purchases, get_status, set_status
+from app.state import get_purchases, get_status, set_status, PAYMENT_POLL_TIMEOUT_SECONDS
 from app.strategy_engine import evaluate_strategy_runtime_modules, is_strategy_module_enabled
 from app.services.steam_client import SteamClient, steam_market_cooldown_remaining
 from app.services.analysis_client import StabilityAnalyzer
@@ -1085,16 +1085,19 @@ def _do_payment_notify_and_wait(
     is_stop_requested: callable,
     log_fn: Optional[Callable[[str, str], None]],
     on_entering_payment: Optional[Callable[[], None]] = None,
+    payment_checker: Optional[Callable[[], bool]] = None,
 ) -> bool:
-    """Handle notification and wait for user payment confirmation.
-    Returns True if user confirmed, False on cancel/timeout/stop.
-    """
+    """Wait for BUFF payment status, with manual/email confirmation as fallback."""
     name = item.get("name", "")
+    started = time.monotonic()
+    finished = threading.Event()
+    confirmation_lock = threading.Lock()
     set_pending_payment({
         "pay_url": pay_url,
         "pay_type": pay_type,
         "name": name,
         "order_id": order_id,
+        "auto_check_until": time.time() + PAYMENT_POLL_TIMEOUT_SECONDS if payment_checker else None,
     })
     try:
         if on_entering_payment:
@@ -1132,19 +1135,51 @@ def _do_payment_notify_and_wait(
         email_user = (notify_cfg.get("email_user") or "").strip()
         email_pass = (notify_cfg.get("email_pass") or "").strip()
         timeout_sec = int(notify_cfg.get("email_timeout_seconds", 300))
+        wait_kwargs = {}
+        if payment_checker is not None:
+            failed_last_check = False
+
+            def _check_payment() -> bool:
+                nonlocal failed_last_check
+                try:
+                    paid = payment_checker() is True
+                    failed_last_check = False
+                except (BuffAuthExpired, BuffRequestBlocked):
+                    raise
+                except Exception as exc:
+                    if not failed_last_check and log_fn:
+                        log_fn(f"[Buff]   → 付款状态查询暂时失败 ({type(exc).__name__})，稍后重试", "warn")
+                    failed_last_check = True
+                    return False
+                if paid and log_fn:
+                    log_fn("[Buff]   → BUFF 已确认付款成功，自动继续", "info")
+                return paid
+
+            wait_kwargs["payment_checker"] = _check_payment
+            timeout_sec = max(0.0, PAYMENT_POLL_TIMEOUT_SECONDS - (time.monotonic() - started))
+            if log_fn:
+                log_fn("[Buff]   → 每 5 秒自动检查付款结果，最多等待 5 分钟；也可手动确认", "info")
         if email_user and email_pass:
             def _email_waiter() -> None:
-                res = wait_email_command(config, timeout_seconds=timeout_sec, is_stop_requested=is_stop_requested, log_fn=log_fn)
-                confirm_payment(res == "success")
+                res = wait_email_command(
+                    config, timeout_seconds=timeout_sec,
+                    is_stop_requested=lambda: finished.is_set() or is_stop_requested(),
+                    log_fn=log_fn,
+                )
+                # A late reply/timeout from this order must not confirm or
+                # cancel a later order after automatic detection has finished.
+                with confirmation_lock:
+                    if not finished.is_set() and res in {"success", "fail"}:
+                        confirm_payment(res == "success")
             t = threading.Thread(target=_email_waiter, daemon=True)
             t.start()
-            ok = wait_payment_confirm()
-        else:
-            ok = wait_payment_confirm(timeout_seconds=timeout_sec)
+        ok = wait_payment_confirm(timeout_seconds=timeout_sec, **wait_kwargs)
         if log_fn:
-            log_fn(f"[Buff]   → 用户确认={'成功' if ok else '取消/失败'}", "info")
+            log_fn(f"[Buff]   → 付款确认={'成功' if ok else '取消/超时/未确认'}", "info")
         return ok
     finally:
+        with confirmation_lock:
+            finished.set()
         set_pending_payment(None)
 def _do_batch_wait_finalize_and_append(
     buff_client: Any,
@@ -1168,10 +1203,12 @@ def _do_batch_wait_finalize_and_append(
     on_entering_payment: Optional[Callable[[], None]] = None,
     pay_type: str = "wechat",
 ) -> Optional[float]:
+    check_paid = getattr(buff_client, "is_batch_paid", None)
     ok = _do_payment_notify_and_wait(
         item, config, unit_price, num, pay_url, pay_type, batch_id, acc,
         set_pending_payment, wait_payment_confirm, confirm_payment,
         is_stop_requested, log_fn, on_entering_payment,
+        payment_checker=(lambda: check_paid(batch_id, game_buff)) if callable(check_paid) else None,
     )
     if is_stop_requested() or not ok:
         update_checkout(
@@ -1414,10 +1451,12 @@ def _do_wait_payment_and_append(
     market_price: Optional[float] = None,
     on_entering_payment: Optional[Callable[[], None]] = None,
 ) -> Optional[float]:
+    check_paid = getattr(buff_client, "is_order_paid", None)
     ok = _do_payment_notify_and_wait(
         item, config, unit_price, num, pay_url, pay_type, order_id, acc,
         set_pending_payment, wait_payment_confirm, confirm_payment,
         is_stop_requested, log_fn, on_entering_payment,
+        payment_checker=(lambda: check_paid(order_id, game_buff)) if callable(check_paid) else None,
     )
     if is_stop_requested() or not ok:
         return None

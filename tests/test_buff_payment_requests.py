@@ -8,7 +8,7 @@ import requests
 
 from app.services import buff_auth, buff_client
 from buff.buyer import (
-    API_BUY, API_BUY_PREVIEW, API_PAGE_PAY, API_STEAM_TRADE, API_USER_INFO,
+    API_BILL_ORDER_INFO, API_BUY, API_BUY_PREVIEW, API_PAGE_PAY, API_STEAM_TRADE, API_USER_INFO,
     API_WX_PAY_QRCODE, BuffBuyer,
 )
 from buff.request_policy import (
@@ -67,6 +67,12 @@ def test_two_checkouts_and_trade_poll_reuse_session_without_playwright(
             return response({"code": "OK", "data": {"pay_methods": [{"value": method_id, "btn_clickable": True}]}})
         if url == API_BUY:
             return response({"code": "OK", "data": {"id": f"bill-{len(created) + 1}"}})
+        if url == API_BILL_ORDER_INFO:
+            assert verb == "GET"
+            assert kwargs["params"]["bill_orders"] == created[-1]
+            return response({"code": "OK", "data": {"items": [
+                {"id": created[-1], "state": "TO_DELIVER", "mode": 2},
+            ]}})
         if url == endpoint:
             assert verb == "GET"
             assert kwargs["params"]["bill_order_id"] == created[-1]
@@ -87,6 +93,7 @@ def test_two_checkouts_and_trade_poll_reuse_session_without_playwright(
             result = client.lock_and_get_pay_url("csgo", 1, "sell-1", "10.00", on_created=created.append)
             assert result["success"] is True
             assert result["pay_url"].endswith("risk_control=0")
+            assert client.is_order_paid(result["order_id"]) is True
             assert client.get_steam_trades() == []
         assert created == ["bill-1", "bill-2"]
         assert len({id(session) for session, *_ in calls}) == 1
