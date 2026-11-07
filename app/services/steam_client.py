@@ -8,7 +8,7 @@ from steam.client import (
     fetch_history as _fetch_history,
     market_hash_name_from_listing_url as _market_hash_name_from_listing_url,
 )
-from steam.request_policy import MarketCooldown
+from steam.request_policy import steam_market_cooldown
 steam_timeout = 15
 steam_retry_attempts = 2
 _history_cache: Dict[tuple, tuple] = {}
@@ -16,7 +16,14 @@ _history_cache_ttl = 300
 _history_cache_max = 200
 _history_failure_ttl = 30
 _history_lock = threading.Lock()
-_history_cooldown = MarketCooldown()
+_history_cooldown = steam_market_cooldown
+
+
+def steam_market_cooldown_remaining() -> float:
+    """Expose shared Steam market backoff without sending a request."""
+    return _history_cooldown.remaining()
+
+
 class SteamClient:
     def __init__(
         self,
@@ -78,7 +85,7 @@ class SteamClient:
                 proxy_url = cfg.get("steam", {}).get("proxy")
                 proxies = {"http": proxy_url, "https": proxy_url} if proxy_url else None
             try:
-                return _fetch_history(
+                result = _fetch_history(
                     market_hash_name,
                     app_id=app_id,
                     timeout=self._timeout,
@@ -87,11 +94,13 @@ class SteamClient:
                     proxies=proxies,
                     raise_on_error=True,
                 )
+                _history_cooldown.record_success()
+                return result
             except SteamHistoryError as exc:
                 from app.state import log
                 log(f"[SteamClient] 历史数据请求失败 (attempt={attempt+1}/{steam_retry_attempts}): {exc}", "warn", category="steam")
                 if exc.status_code == 429:
-                    remaining = _history_cooldown.defer(exc.retry_after)
+                    remaining = _history_cooldown.defer(exc.retry_after_header)
                     log(f"[SteamClient] 历史接口 HTTP 429，暂停请求约 {remaining:.0f}s，不切换代理重试", "warn", category="steam")
                     return None
                 if not exc.retryable:

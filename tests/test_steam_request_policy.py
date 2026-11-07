@@ -40,3 +40,31 @@ def test_platform_date_conversion_failure_keeps_default_cooldown(monkeypatch):
 
     monkeypatch.setattr(request_policy, "parsedate_to_datetime", invalid_date)
     assert parse_retry_after("Sun, 01 Jan 1601 00:00:00 GMT") == 60
+
+
+def test_repeated_429_without_retry_after_backs_off_progressively():
+    now = [1000.0]
+    cooldown = MarketCooldown(lambda: now[0])
+    for expected in (60, 120, 240, 480, 900, 900):
+        assert cooldown.defer() == expected
+        now[0] += expected + 1
+
+
+def test_server_retry_after_is_respected_after_repeated_limits():
+    now = [1000.0]
+    cooldown = MarketCooldown(lambda: now[0])
+    cooldown.defer()
+    now[0] += 61
+    assert cooldown.defer("600") == 600
+
+
+def test_success_resets_backoff_without_shortening_active_cooldown():
+    now = [1000.0]
+    cooldown = MarketCooldown(lambda: now[0])
+    cooldown.defer()
+    now[0] += 61
+    assert cooldown.defer() == 120
+    cooldown.record_success()
+    assert cooldown.remaining() == 120
+    now[0] += 121
+    assert cooldown.defer() == 60

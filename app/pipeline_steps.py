@@ -10,9 +10,9 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.services.iflow_client import fetch_iflow_rows as _fetch_iflow_rows
-from app.state import get_purchases, set_status
+from app.state import get_purchases, get_status, set_status
 from app.strategy_engine import evaluate_strategy_runtime_modules, is_strategy_module_enabled
-from app.services.steam_client import SteamClient
+from app.services.steam_client import SteamClient, steam_market_cooldown_remaining
 from app.services.analysis_client import StabilityAnalyzer
 from app.services.buff_client import count_lowest_price_orders, first_order_at_price
 from app.services.buff_checkout_guard import (
@@ -31,6 +31,7 @@ from buff import (
     BuffVerificationRequired,
     BuffWriteResultUnknown,
 )
+from steam.request_policy import MAX_CONSECUTIVE_MARKET_429, SteamMarketRateLimitExceeded
 
 STEAM_FEE_FACTOR = 1.15  # Steam take rate for calculating net proceeds
 BUFF_ORDERS_CACHE_TTL_SECONDS = 3.0
@@ -752,6 +753,30 @@ def _passes_custom_buy_modules(
     return blocking is None
 
 
+def _wait_for_steam_cooldown(is_stop_requested, log_fn, progress_item: str) -> bool:
+    remaining = steam_market_cooldown_remaining()
+    if remaining <= 0:
+        return not is_stop_requested()
+    if log_fn:
+        log_fn(
+            f"[稳定性] Steam 市场 HTTP 429 限流，等待约 {remaining:.0f}s 后重试当前候选；未判定为无历史数据",
+            "warn",
+        )
+    snapshot = get_status()
+    progress = {key: snapshot.get(key, 0 if key != "next_progress_item" else "")
+                for key in ("progress_total", "progress_done", "next_progress_item")}
+    while remaining > 0:
+        if is_stop_requested():
+            return False
+        set_status("running", step="STEAM_COOLDOWN", progress_item=f"{progress_item} · Steam 市场冷却 {remaining:.0f}s", **progress)
+        time.sleep(min(1.0, remaining))
+        remaining = steam_market_cooldown_remaining()
+    if is_stop_requested():
+        return False
+    set_status("running", step="STABILITY_CHECK", progress_item=progress_item, **progress)
+    return True
+
+
 def pick_stable_item(
     filtered: List[Dict[str, Any]],
     config: dict,
@@ -771,6 +796,7 @@ def pick_stable_item(
     min_daily_trades = float(stability_cfg.get("min_daily_trades", 5))
     excluded = exclude_goods_ids or set()
     stability_failed: Set[int] = set()
+    rate_limit_responses = 0
     n = len(filtered)
     request_interval = float(stability_cfg.get("request_interval_seconds", 2.5))
     failure_delay = max(0, float(stability_cfg.get("request_failure_delay_seconds", 5) or 5))
@@ -801,6 +827,10 @@ def pick_stable_item(
         item_log = (lambda msg, level, _n=_short: log_fn(f"[{_n}] {msg}", level)) if log_fn else None
         next_name = filtered[i + 1].get("name", "") if i + 1 < n else ""
         set_status("running", step="STABILITY_CHECK", progress_total=n, progress_done=i, progress_item=f"({i+1}/{n}) {name}", next_progress_item=f"({i+2}/{n}) {next_name}" if next_name else "")
+        # Do not consume other candidates or request market depth while the
+        # Steam market endpoints are rate limited.
+        if not _wait_for_steam_cooldown(is_stop_requested, item_log, f"({i+1}/{n}) {name}"):
+            return None, stability_failed
         pipeline_cfg = config.get("pipeline", {})
         verbose_detail = bool(pipeline_cfg.get("verbose_debug", False))
         if item_log and verbose_detail:
@@ -827,9 +857,18 @@ def pick_stable_item(
             # 策略通过之后，避免对注定淘汰的候选消耗请求。
             if item_log and verbose_detail:
                 item_log("[稳定性] 拉取 Steam 卖单深度…", "debug")
-            steam_sell_data, steam_error = _fetch_steam_sell_data(
-                market_hash_name, config, app_id=730, return_error=True
-            )
+            while True:
+                steam_sell_data, steam_error = _fetch_steam_sell_data(
+                    market_hash_name, config, app_id=730, return_error=True
+                )
+                if steam_sell_data or steam_market_cooldown_remaining() <= 0:
+                    rate_limit_responses = 0
+                    break
+                rate_limit_responses += 1
+                if rate_limit_responses >= MAX_CONSECUTIVE_MARKET_429:
+                    raise SteamMarketRateLimitExceeded(steam_market_cooldown_remaining())
+                if not _wait_for_steam_cooldown(is_stop_requested, item_log, f"({i+1}/{n}) {name}"):
+                    return None, stability_failed
             if not steam_sell_data:
                 if item_log:
                     item_log(f"[稳定性] 预检未通过: 无法获取 Steam 卖单信息：{steam_error or '未知原因'}", "warn")
@@ -909,7 +948,18 @@ def pick_stable_item(
         # 6. 拉历史K线 + 稳定性分析
         if item_log:
             item_log("[稳定性] 拉取历史价格…", "info")
-        raw = steam_client.fetch_history(market_hash_name, return_currency=True)
+        while True:
+            if not _wait_for_steam_cooldown(is_stop_requested, item_log, f"({i+1}/{n}) {name}"):
+                return None, stability_failed
+            raw = steam_client.fetch_history(market_hash_name, return_currency=True)
+            if raw is not None or steam_market_cooldown_remaining() <= 0:
+                rate_limit_responses = 0
+                break
+            rate_limit_responses += 1
+            if rate_limit_responses >= MAX_CONSECUTIVE_MARKET_429:
+                raise SteamMarketRateLimitExceeded(steam_market_cooldown_remaining())
+        if is_stop_requested():
+            return None, stability_failed
         if raw and isinstance(raw, dict):
             history = raw.get("history")
             currency = raw.get("currency")
@@ -920,7 +970,8 @@ def pick_stable_item(
             if gid:
                 stability_failed.add(gid)
             if item_log:
-                item_log("[稳定性] 无历史数据或请求失败，试下一个", "warn")
+                reason = "历史价格请求失败，详情见 SteamClient 日志" if raw is None else "Steam 未返回历史成交记录"
+                item_log(f"[稳定性] {reason}，试下一个", "warn")
             if failure_delay > 0:
                 jittered_sleep(failure_delay)
             continue

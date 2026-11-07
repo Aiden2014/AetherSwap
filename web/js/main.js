@@ -118,7 +118,8 @@ async function refreshStatus() {
     if (top) top.textContent = statusText;
     const inline = el("status-text-inline");
     if (inline) inline.textContent = statusText;
-    const stepDesc = d.step || "";
+    const stepLabels = { STEAM_COOLDOWN: "等待 Steam 市场恢复", STEAM_RATE_LIMITED: "Steam 持续限流，任务已停止" };
+    const stepDesc = stepLabels[d.step] || d.step || "";
     const item = d.progress_item || "";
     const newText = stepDesc && item ? `${stepDesc}：${item}` : (stepDesc || item || "—");
     const nextItem = d.next_progress_item || "";
@@ -139,7 +140,7 @@ async function refreshStatus() {
     if (raw !== lastStatus) {
       if (raw === "running") toast("已开始运行");
       if (raw === "stopped") toast("已停止");
-      if (raw === "error") toast("发生错误", d.step || "请看调试日志");
+      if (raw === "error") toast("发生错误", stepDesc || "请看调试日志");
       lastStatus = raw;
     }
   } catch {

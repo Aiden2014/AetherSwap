@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 from steam.client import build_listing_url
+from steam.request_policy import steam_market_cooldown
 from utils.delay import jittered_sleep
 from utils.proxy_manager import get_proxy_manager
 from utils.money import USD_TO_CNY_DEFAULT
@@ -22,6 +23,23 @@ _item_nameid_cache: dict = {}
 _sell_orders_cache: dict = {}
 _item_nameid_cache_lock = threading.Lock()
 _sell_orders_cache_lock = threading.Lock()
+_market_cooldown = steam_market_cooldown
+
+
+def _market_cooldown_error() -> Optional[str]:
+    remaining = _market_cooldown.remaining()
+    if remaining > 0:
+        return f"Steam 市场 HTTP 429 限流冷却中，约 {remaining:.0f} 秒后重试"
+    return None
+
+
+def _record_market_rate_limit(response) -> Optional[str]:
+    if response.status_code == 429:
+        _market_cooldown.defer((getattr(response, "headers", {}) or {}).get("Retry-After"))
+        return _market_cooldown_error()
+    if response.status_code == 200:
+        _market_cooldown.record_success()
+    return None
 def clear_caches() -> None:
     with _item_nameid_cache_lock:
         _item_nameid_cache.clear()
@@ -423,6 +441,8 @@ def _fetch_ssr_sell_orders_cny(
     timeout: int = 15,
     usd_to_cny_rate: float = USD_TO_CNY_DEFAULT,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if reason := _market_cooldown_error():
+        return None, reason
     url = build_listing_url(market_hash_name, app_id)
     pm = get_proxy_manager()
     last_error = ""
@@ -434,6 +454,8 @@ def _fetch_ssr_sell_orders_cny(
                 "Referer": url,
             }
             r = session.get(url, headers=headers, timeout=timeout, proxies=proxies, allow_redirects=True)
+            if reason := _record_market_rate_limit(r):
+                return None, reason
             if r.status_code == 200:
                 result, parse_error = _extract_ssr_orderbook_cny(
                     r.text,
@@ -452,6 +474,8 @@ def _fetch_ssr_sell_orders_cny(
                         proxies=proxies,
                         allow_redirects=True,
                     )
+                    if reason := _record_market_rate_limit(r2):
+                        return None, reason
                     if r2.status_code == 200:
                         result, parse_error2 = _extract_ssr_orderbook_cny(
                             r2.text,
@@ -480,6 +504,8 @@ def _fetch_action_orderbook_cny(
     timeout: int = 15,
     usd_to_cny_rate: float = USD_TO_CNY_DEFAULT,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if reason := _market_cooldown_error():
+        return None, reason
     name = _normalize_market_hash_name(market_hash_name)
     if not name:
         return None, "Steam 新版 orderbook 接口缺少 market_hash_name"
@@ -508,6 +534,8 @@ def _fetch_action_orderbook_cny(
                 proxies=proxies,
                 allow_redirects=True,
             )
+            if reason := _record_market_rate_limit(r):
+                return None, reason
             if r.status_code == 200:
                 try:
                     payload = r.json()
@@ -572,6 +600,8 @@ def get_item_nameid(
             entry = _item_nameid_cache.get(key)
         if entry and time.time() < entry[1]:
             return (entry[0], None) if return_error else entry[0]
+    if reason := _market_cooldown_error():
+        return (None, reason) if return_error else None
     url = build_listing_url(market_hash_name, app_id)
     headers = {
         "Accept": "*/*",
@@ -584,6 +614,8 @@ def get_item_nameid(
         proxies = pm.get_proxies_for_request(failed=failed)
         try:
             r = session.get(url, headers=headers, timeout=timeout, proxies=proxies)
+            if reason := _record_market_rate_limit(r):
+                return (None, reason) if return_error else None
             if r.status_code == 200:
                 nameid = _extract_item_nameid(r.text)
                 if nameid:
@@ -622,6 +654,8 @@ def fetch_item_orders_histogram(
     return_error: bool = False,
 ):
     global _cb_fail_streak, _cb_open_until
+    if reason := _market_cooldown_error():
+        return (None, reason) if return_error else None
     with _cb_lock:
         if time.time() < _cb_open_until:
             remaining = max(1, int(math.ceil(_cb_open_until - time.time())))
@@ -733,6 +767,8 @@ def get_sell_orders_cny(
             entry = _sell_orders_cache.get(key)
         if entry and time.time() < entry[1]:
             return (entry[0], None) if return_error else entry[0]
+    if reason := _market_cooldown_error():
+        return (None, reason) if return_error else None
     ssr_result, ssr_error = _fetch_ssr_sell_orders_cny(
         session,
         market_hash_name,
@@ -744,6 +780,8 @@ def get_sell_orders_cny(
             with _sell_orders_cache_lock:
                 _sell_orders_cache[key] = (ssr_result, time.time() + _SELL_ORDERS_TTL)
         return (ssr_result, None) if return_error else ssr_result
+    if reason := _market_cooldown_error():
+        return (None, reason) if return_error else None
     action_result, action_error = _fetch_action_orderbook_cny(
         session,
         market_hash_name,
@@ -755,6 +793,8 @@ def get_sell_orders_cny(
             with _sell_orders_cache_lock:
                 _sell_orders_cache[key] = (action_result, time.time() + _SELL_ORDERS_TTL)
         return (action_result, None) if return_error else action_result
+    if reason := _market_cooldown_error():
+        return (None, reason) if return_error else None
     item_nameid = None
     nameid_error = None
     if use_cache:

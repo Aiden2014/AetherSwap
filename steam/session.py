@@ -75,6 +75,10 @@ class _SteamSession(requests.Session):
     """Apply the app's proxy policy to callers without their own routing loop."""
 
     def request(self, method, url, **kwargs):
+        if urlparse(url).hostname == "steamcommunity.com":
+            from steam.request_policy import check_steam_market_cooldown
+
+            check_steam_market_cooldown()
         # Market order-book callers already select proxies and own their retries.
         if "proxies" in kwargs:
             return super().request(method, url, **kwargs)

@@ -66,4 +66,4 @@ def test_history_success_contract_is_unchanged(monkeypatch, return_currency):
     monkeypatch.setattr(client, "get_market", get)
     result = client.fetch_history("Test Item", return_currency=return_currency)
     assert result == ({"history": prices, "currency": "USD"} if return_currency else prices)
-    assert sent[0]["headers"]["Accept-Language"] == "en-US,en;q=0.9"
+    assert sent[0]["headers"]["Accept-Language"] == "zh-CN,zh;q=0.9"

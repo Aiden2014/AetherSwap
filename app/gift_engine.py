@@ -7,6 +7,7 @@ import requests
 import urllib3
 from bs4 import BeautifulSoup
 from steam.session import parse_cookies
+from steam.request_policy import SteamMarketCooldownActive, check_steam_market_cooldown, steam_market_cooldown
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 def _build_cookies(cookies_raw: str) -> dict:
@@ -189,6 +190,7 @@ def get_base_auth_status(cookies_raw: str, *, require_country: bool = False):
     except Exception as e:
         raise RuntimeError(f"获取底层鉴权失败: {e}") from e
 def get_wallet_balance(cookies_raw: str) -> dict:
+    check_steam_market_cooldown()
     cookies = _build_cookies(cookies_raw)
     from utils.proxy_manager import get_proxy_manager
     pm = get_proxy_manager()
@@ -203,6 +205,9 @@ def get_wallet_balance(cookies_raw: str) -> dict:
             verify=False,
             timeout=15,
         )
+        if resp.status_code == 429:
+            steam_market_cooldown.defer(resp.headers.get("Retry-After"))
+            check_steam_market_cooldown()
         m = re.search(r'g_rgWalletInfo\s*=\s*(\{[^;]+\})', resp.text)
         if m:
             wallet = json.loads(m.group(1))
@@ -232,9 +237,12 @@ def get_wallet_balance(cookies_raw: str) -> dict:
                     "wallet_country": wallet_country,
                     "country_code": wallet_country,
                 }
+    except SteamMarketCooldownActive:
+        raise
     except Exception:
         pass
     try:
+        check_steam_market_cooldown()
         jwt_token, _, _ = get_base_auth_status(cookies_raw)
         if jwt_token:
             api_url = (
@@ -274,6 +282,8 @@ def get_wallet_balance(cookies_raw: str) -> dict:
                         "wallet_country": wallet_country,
                         "country_code": wallet_country,
                     }
+    except SteamMarketCooldownActive:
+        raise
     except Exception:
         pass
     if unknown_currency_id is not None:

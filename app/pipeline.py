@@ -35,6 +35,7 @@ from app.services.buff_checkout_guard import (
     update_checkout,
 )
 from app.services.steam_client import SteamClient
+from steam.request_policy import SteamMarketRateLimitExceeded
 from app.state import get_state, append_sale
 from app.strategy_engine import apply_strategy_to_config
 from buff import (
@@ -161,12 +162,17 @@ def _process_deals_for_target(
             return acc, bought, TIME_WINDOW_CLOSED
 
         ctx.set_status("running", "CHECKING_STABILITY", progress_total=n_filtered, progress_done=0, progress_item="")
-        chosen, new_stability_failed = pick_stable_item(
-            filtered, cfg, steam_client, analyzer, ctx.is_stop_requested,
-            log_fn=ctx.log,
-            exclude_goods_ids=failed_goods_ids | skipped_this_round | stability_failed_this_round,
-            buff_client=buyer,
-        )
+        try:
+            chosen, new_stability_failed = pick_stable_item(
+                filtered, cfg, steam_client, analyzer, ctx.is_stop_requested,
+                log_fn=ctx.log,
+                exclude_goods_ids=failed_goods_ids | skipped_this_round | stability_failed_this_round,
+                buff_client=buyer,
+            )
+        except SteamMarketRateLimitExceeded as exc:
+            ctx.log(str(exc), "error", category="steam")
+            ctx.set_status("error", "STEAM_RATE_LIMITED")
+            return acc, bought, True
         stability_failed_this_round |= new_stability_failed
 
         if ctx.is_stop_requested():

@@ -265,6 +265,7 @@ class SteamHistoryError(Exception):
     def __init__(self, reason: str, response=None):
         self.status_code = response.status_code if response is not None else None
         self.retry_after = None
+        self.retry_after_header = None
         self.retryable = self.status_code is None or self.status_code == 408 or (
             self.status_code is not None and self.status_code >= 500
         )
@@ -285,8 +286,9 @@ class SteamHistoryError(Exception):
                 f"body={body_kind}", f"bytes={len(response.content)}",
             ])
             if self.status_code == 429:
-                self.retry_after = parse_retry_after(response.headers.get("Retry-After"))
-                details.append(f"cooldown={self.retry_after:g}s")
+                self.retry_after_header = response.headers.get("Retry-After")
+                self.retry_after = parse_retry_after(self.retry_after_header)
+                details.append(f"retry_after={self.retry_after:g}s" if self.retry_after_header else "retry_after=unspecified")
         super().__init__("; ".join(details))
 
 
@@ -304,7 +306,8 @@ def fetch_history(
 ) -> Union[Optional[list], Optional[dict]]:
     encoded = quote(market_hash_name, safe="")
     url = f"https://steamcommunity.com/market/pricehistory/?appid={app_id}&market_hash_name={encoded}"
-    h = {**DEFAULT_HEADERS, **(headers or {})}
+    # Keep the language that succeeded in browser/program request comparisons.
+    h = {**DEFAULT_HEADERS, "Accept-Language": "zh-CN,zh;q=0.9", **(headers or {})}
     if proxies is None:
         px = {}
         if os.environ.get("HTTP_PROXY"):
