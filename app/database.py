@@ -279,6 +279,27 @@ def db_get_purchases() -> list:
     with get_session() as session:
         rows = session.exec(select(Purchase).order_by(Purchase.id)).all()
         return [_purchase_to_dict(r) for r in rows]
+
+def db_import_inventory_purchases(records: list) -> dict:
+    """Serialize duplicate checking and insertion, including concurrent imports."""
+    from sqlalchemy import text
+    added, skipped = [], []
+    with get_session() as session:
+        session.execute(text("BEGIN IMMEDIATE"))
+        existing = {str(value).strip() for value in session.exec(select(Purchase.assetid)).all() if value}
+        for record in records:
+            assetid = str(record["assetid"]).strip()
+            if assetid in existing:
+                skipped.append(assetid)
+                continue
+            price = float(record.get("price") or 0)
+            if not math.isfinite(price) or price <= 0:
+                raise ValueError(f"请为 assetid {assetid} 填写大于 0 的有效购入价")
+            session.add(_purchase_from_dict({**record, "assetid": assetid}))
+            existing.add(assetid)
+            added.append(assetid)
+        session.commit()
+    return {"added": added, "skipped": skipped}
 def db_append_sale(s: dict) -> None:
     with get_session() as session:
         session.add(_sale_from_dict(s))

@@ -80,10 +80,10 @@ def test_inventory_render_uses_local_time_and_preserves_description(
         }""", cases)
         rows = page.locator("#inv-table tbody tr")
         assert rows.count() == len(cases)
-        displayed = rows.evaluate_all("rows => rows.map(row => row.cells[4].textContent)")
+        displayed = rows.evaluate_all("rows => rows.map(row => row.cells[6].textContent)")
         assert displayed == [expected] * 4 + [early] + ["\u2014"] * 8
-        assert rows.nth(3).locator("td").nth(6).inner_text() == description
-        assert rows.nth(12).locator("td").nth(6).inner_text() == cases[12]["cooldown_text"]
+        assert rows.nth(3).locator("td").nth(8).inner_text() == description
+        assert rows.nth(12).locator("td").nth(8).inner_text() == cases[12]["cooldown_text"]
         assert errors == []
     finally:
         context.close()

@@ -1481,6 +1481,135 @@ textarea.app-modal-input {
   overflow-wrap: anywhere;
 }
 
+.inventory-holdings-modal {
+  width: calc(100vw - 48px);
+  max-width: 960px;
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inventory-holdings-modal > h3,
+.inventory-holdings-modal > p,
+.inventory-holdings-actions {
+  flex-shrink: 0;
+}
+
+.inventory-holdings-modal .table-container {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+#inventory-holdings-table {
+  table-layout: fixed;
+}
+
+#inventory-holdings-table th,
+#inventory-holdings-table td {
+  padding: 14px 16px;
+  vertical-align: middle;
+}
+
+#inventory-holdings-table th:nth-child(2) { width: 164px; }
+#inventory-holdings-table th:nth-child(3) { width: 160px; }
+#inventory-holdings-table th:nth-child(4) { width: 156px; }
+
+#inventory-holdings-table .inv-holding-name {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+#inventory-holdings-table .inv-holding-assetid,
+#inventory-holdings-table .inv-holding-source,
+.inventory-holdings-actions .btn {
+  white-space: nowrap;
+}
+
+#inventory-holdings-table .inv-holding-price {
+  width: 100%;
+  min-width: 0;
+}
+
+.inventory-holdings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+#inventory-holdings-cancel {
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .inventory-holdings-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    padding: 20px;
+  }
+
+  #inventory-holdings-table,
+  #inventory-holdings-table tbody {
+    display: block;
+  }
+
+  #inventory-holdings-table thead {
+    display: none;
+  }
+
+  #inventory-holdings-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 16px;
+    padding: 16px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  #inventory-holdings-table tbody tr:last-child { border-bottom: none; }
+
+  #inventory-holdings-table td {
+    display: block;
+    padding: 0;
+    min-width: 0;
+    border: none;
+  }
+
+  #inventory-holdings-table .inv-holding-name,
+  #inventory-holdings-table .inv-holding-assetid {
+    grid-column: 1 / -1;
+  }
+
+  #inventory-holdings-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--font-sans);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  #inventory-holdings-table .inv-holding-assetid::before {
+    display: inline;
+    margin-right: 10px;
+  }
+
+  #inventory-holdings-table tr:hover td:first-child { box-shadow: none; }
+
+  .inventory-holdings-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .inventory-holdings-actions .btn {
+    min-width: 0;
+    padding: 10px 8px;
+  }
+
+  #inventory-holdings-cancel { margin-left: 0; }
+}
+
 .relogin-actions {
   display: flex;
   flex-wrap: wrap;

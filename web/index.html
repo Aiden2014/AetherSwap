@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/variables.css" />
   <link rel="stylesheet" href="/css/base.css" />
   <link rel="stylesheet" href="/css/layout.css?v=2" />
-  <link rel="stylesheet" href="/css/components.css" />
+  <link rel="stylesheet" href="/css/components.css?v=2" />
   <link rel="stylesheet" href="/css/animations.css" />
   <style>
     /* Nav badge */
@@ -1064,13 +1064,16 @@
             <span class="value mono" id="inv-tax-value">0.00</span>
           </div>
           <button id="btn-refresh-inventory" class="btn btn-sm btn-secondary">立即刷新</button>
+          <button id="btn-inventory-add-holdings" class="btn btn-sm btn-primary" disabled>添加所选到持有饰品（0）</button>
           <span id="inv-data-status" class="muted small" role="status">库存尚未刷新</span>
         </div>
         <div class="table-container">
           <table id="inv-table">
             <thead>
               <tr>
+                <th><input id="inv-select-all" type="checkbox" aria-label="全选库存物品" /></th>
                 <th>物品名称</th>
+                <th>assetid</th>
                 <th>链接</th>
                 <th>可出售</th>
                 <th>可交易</th>
@@ -1709,6 +1712,26 @@
     </svg>
   </button>
 
+  <div id="inventory-holdings-overlay" class="relogin-overlay hidden">
+    <div class="relogin-modal inventory-holdings-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-holdings-title">
+      <h3 id="inventory-holdings-title">添加到持有饰品</h3>
+      <p class="muted small">自动匹配 BUFF 已完成的购入记录，可逐件修改购入价（人民币）。已有相同 assetid 的记录会跳过。</p>
+      <p id="inventory-holdings-status" class="muted small" role="status"></p>
+      <div class="table-container">
+        <table id="inventory-holdings-table">
+          <thead><tr><th>物品名称</th><th>assetid</th><th>购入价（¥ / 件）</th><th>价格来源</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="inventory-holdings-actions">
+        <button type="button" id="inventory-holdings-sync" class="btn btn-secondary">同步 BUFF 购入价</button>
+        <button type="button" id="inventory-holdings-manual" class="btn btn-secondary">直接手动填价</button>
+        <button type="button" id="inventory-holdings-cancel" class="btn btn-secondary">取消</button>
+        <button type="button" id="inventory-holdings-save" class="btn btn-primary">添加到持有饰品</button>
+      </div>
+    </div>
+  </div>
+
   <div id="edit-tx-overlay" class="relogin-overlay hidden">
     <div class="relogin-modal">
       <h3>编辑记录</h3>
@@ -1788,7 +1811,8 @@
   <script src="/js/settings.js?v=2"></script>
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
-  <script src="/js/main.js?v=4"></script>
+  <script src="/js/main.js?v=6"></script>
+  <script src="/js/inventoryHoldings.js?v=3"></script>
   <script src="/js/gift.js"></script>
   <script src="/js/steamDeals.js"></script>
   <script>

@@ -28,6 +28,11 @@ from utils.delay import jittered_sleep
 BUFF_COOKIE_DOMAIN = "buff.163.com"
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
+
+class BuffPurchaseHistoryError(ValueError):
+    """A history API rejection or malformed response, independent of login."""
+
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -702,6 +707,30 @@ class BuffBuyer:
         data = response.get("data")
         return (response.get("code") == "OK" and isinstance(data, dict)
                 and str(data.get("state")) == "2")
+
+    def get_purchase_history_page(self, page_num: int = 1, game: str = "csgo") -> dict:
+        """Read history with the same contract as the existing payment query.
+
+        The API rejects state=SUCCESS. Filter completed records locally instead.
+        """
+        response = self._make_request(
+            "GET", API_HISTORY,
+            params={"game": game, "page_num": str(page_num), "page_size": "50",
+                    "_": str(int(time.time() * 1000))},
+            headers={"Referer": f"https://buff.163.com/market/buy_order/history?game={game}"},
+        )
+        data = response.get("data")
+        if response.get("code") != "OK":
+            if response.get("code") == "Invalid Argument":
+                raise BuffPurchaseHistoryError("BUFF 购入记录接口拒绝了查询参数（Invalid Argument）")
+            raise BuffPurchaseHistoryError("BUFF 购入记录接口返回失败状态，请稍后重试")
+        if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+            raise BuffPurchaseHistoryError("BUFF 购入记录接口返回的数据格式异常，请稍后重试")
+        goods = data.get("goods_infos") or {}
+        return {**data, "items": [
+            {**item, "goods_info": item.get("goods_info") or goods.get(str(item.get("goods_id"))) or {}}
+            for item in data["items"] if isinstance(item, dict)
+        ]}
 
     def check_wait_pay_orders(self, game: str = "csgo") -> bool:
         params = {

@@ -198,6 +198,9 @@ class BuffClient:
 
         return bool(self._run(operation))
 
+    def get_purchase_history_page(self, page_num: int = 1, game: str = "csgo") -> dict:
+        return self._run(lambda buyer: buyer.get_purchase_history_page(page_num, game))
+
     def get_steam_trades(self) -> Optional[list]:
         return self._run(lambda buyer: buyer.get_steam_trades())
 

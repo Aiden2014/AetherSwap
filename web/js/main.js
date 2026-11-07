@@ -322,16 +322,20 @@ async function refreshInventory(forceRefresh = true) {
         ? `<a href="${steamUrl}" target="_blank" rel="noopener" class="link-steam">Steam</a> <a href="${buffUrl}" target="_blank" rel="noopener" class="link-buff">Buff</a>`
         : "—";
       rowHtmls.push(`
-        <tr><td>${escapeHtml(it.name || "")}</td>
+        <tr data-assetid="${escapeHtml(String(it.assetid || ''))}" data-market-hash-name="${escapeHtml(mhn)}">
+        <td><input type="checkbox" class="inv-select" aria-label="选择物品" ${it.assetid ? '' : 'disabled'}></td>
+        <td class="inv-name">${escapeHtml(it.name || "")}</td>
+        <td class="mono">${escapeHtml(String(it.assetid || '—'))}</td>
         <td class="inv-links">${linksHtml}</td>
         <td>${sellHtml}</td>
         <td>${tradeHtml}</td>
         <td>${timeHtml}</td>
-        <td class="mono">${escapeHtml(lowestStr)}</td>
+        <td class="mono inv-price">${escapeHtml(lowestStr)}</td>
         <td class="muted small">${escapeHtml(it.cooldown_text || "")}</td></tr>
       `);
     }
     tbody.innerHTML = rowHtmls.join("");
+    if (typeof updateInventorySelection === "function") updateInventorySelection();
     const c = el("inv-count");
     if (c) c.textContent = items.length;
     const v = el("inv-total-value");
@@ -360,17 +364,16 @@ async function refreshMarketPrices() {
       if (tbody) {
         const rows = tbody.querySelectorAll("tr");
         rows.forEach((row) => {
-          const nameTd = row.querySelector("td:first-child");
-          const priceTd = row.querySelectorAll("td")[5];
-          if (!nameTd || !priceTd) return;
-          const name = nameTd.textContent.trim();
+          const priceTd = row.querySelector(".inv-price");
+          if (!priceTd) return;
+          const name = row.dataset.marketHashName;
           const price = prices[name];
           if (price != null) {
             priceTd.textContent = price.toFixed(2);
           }
         });
         rows.forEach((row) => {
-          const priceTd = row.querySelectorAll("td")[5];
+          const priceTd = row.querySelector(".inv-price");
           const v = parseFloat(priceTd?.textContent);
           if (!isNaN(v)) totalValue += v;
         });
@@ -399,8 +402,7 @@ function getInventoryCache() {
   const tbody = document.querySelector("#inv-table tbody");
   if (!tbody) return [];
   return Array.from(tbody.querySelectorAll("tr")).map((row) => {
-    const tds = row.querySelectorAll("td");
-    return { name: tds[0]?.textContent.trim() || "" };
+    return { name: row.dataset.marketHashName || "" };
   });
 }
 function aggregateByItemName(purchases, resellRatio = 0.85) {

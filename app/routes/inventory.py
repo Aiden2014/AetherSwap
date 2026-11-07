@@ -1,11 +1,126 @@
 """Inventory routes."""
 from fastapi import APIRouter
+from pydantic import BaseModel, Field
+from typing import Optional
 from app.state import get_inventory, is_steam_background_allowed, log, set_inventory
 from app.inventory_cs2 import scan_cs2_inventory
 from app.pipeline import run_sell_phase_on_inventory_update
 from app.config_loader import get_steam_credentials, load_app_config_validated
 from app.shared_market import get_steam_smart_price_cny, batch_fetch_prices
 router = APIRouter()
+
+
+class InventoryPurchasePreview(BaseModel):
+    assetids: list[str] = Field(default_factory=list, max_length=500)
+    sync_buff: bool = True
+
+
+class InventoryPurchaseItem(BaseModel):
+    assetid: str
+    price: Optional[float] = None
+
+
+class InventoryPurchaseImport(BaseModel):
+    items: list[InventoryPurchaseItem] = Field(default_factory=list, max_length=500)
+
+
+def _selected_inventory(assetids):
+    inventory = {str(item.get("assetid") or ""): item for item in get_inventory()}
+    ids = list(dict.fromkeys(str(value).strip() for value in assetids))
+    if not ids or any(not value or value not in inventory for value in ids):
+        raise ValueError("所选物品已不在库存中，请刷新库存后重试")
+    return [inventory[value] for value in ids]
+
+
+@router.post("/api/inventory/holdings/preview")
+def api_inventory_holdings_preview(body: InventoryPurchasePreview):
+    from app.state import get_purchases
+    from app.inventory_holdings import match_buff_purchases, positive_price
+    from buff import BuffAuthExpired, BuffRateLimited, BuffVerificationRequired, BuffRequestBlocked
+    from buff.buyer import BuffPurchaseHistoryError
+    from requests.exceptions import RequestException
+    try:
+        items = _selected_inventory(body.assetids)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    existing = {str(p.get("assetid") or "").strip() for p in get_purchases()}
+    pending = [item for item in items if str(item["assetid"]) not in existing]
+    matches, warning = {}, ""
+    if body.sync_buff and pending:
+        from app.config_loader import get_buff_credentials
+        from app.services.buff_client import create_buff_client_from_config
+        credentials = get_buff_credentials()
+        if not credentials.get("cookies"):
+            warning = "未配置 BUFF 登录，请手动填写购入价或登录后同步"
+        else:
+            client = None
+            try:
+                client = create_buff_client_from_config(credentials, load_app_config_validated())
+                orders = []
+                for page in range(1, 11):
+                    data = client.get_purchase_history_page(page)
+                    rows = data["items"]
+                    orders.extend(rows)
+                    total_pages = int(data.get("total_page") or 0)
+                    if not rows or (total_pages > 0 and page >= total_pages) or (not total_pages and len(rows) < 50):
+                        break
+                else:
+                    warning = f"已查询最近 {len(orders)} 条 BUFF 购入记录，较早的物品请手动填价"
+                matches = match_buff_purchases(pending, orders, str(get_steam_credentials().get("steam_id") or ""), get_inventory())
+            except BuffAuthExpired:
+                warning = "BUFF 登录已过期，请重新登录后同步；也可直接手动填价"
+            except BuffRateLimited as exc:
+                warning = f"BUFF 请求频率受限，请约 {max(1, int(exc.retry_after))} 秒后重试；也可直接手动填价"
+            except BuffVerificationRequired:
+                warning = "BUFF 要求安全验证，请在 BUFF 页面完成验证后重试；也可直接手动填价"
+            except BuffRequestBlocked:
+                warning = "BUFF 请求暂被保护策略阻止，请稍后重试；也可直接手动填价"
+            except BuffPurchaseHistoryError as exc:
+                warning = f"{exc}；也可直接手动填价"
+            except RequestException:
+                warning = "BUFF 购入记录查询遇到网络错误，请稍后重试；也可直接手动填价"
+            except Exception as exc:
+                log(f"BUFF 购入记录处理失败（{type(exc).__name__}）", "warn", category="buff")
+                warning = "BUFF 购入记录处理失败，请查看调试日志；也可直接手动填价"
+            finally:
+                if client is not None:
+                    client.close()
+    return {"ok": True, "warning": warning, "items": [
+        {"assetid": str(item["assetid"]), "name": item.get("name") or item.get("market_hash_name"),
+         "exists": str(item["assetid"]) in existing,
+         "price": positive_price(matches[str(item["assetid"])].get("price")) if str(item["assetid"]) in matches else None,
+         "source": "buff" if str(item["assetid"]) in matches else "manual"}
+        for item in items
+    ]}
+
+
+@router.post("/api/inventory/holdings")
+def api_inventory_add_holdings(body: InventoryPurchaseImport):
+    import time
+    from app.database import db_import_inventory_purchases
+    from app.state import get_purchases
+    from app.inventory_holdings import positive_price
+    try:
+        items = _selected_inventory([row.assetid for row in body.items])
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    existing = {str(p.get("assetid") or "").strip() for p in get_purchases()}
+    prices = {row.assetid.strip(): positive_price(row.price) for row in body.items}
+    records = []
+    for item in items:
+        assetid = str(item["assetid"])
+        if not prices[assetid] and assetid not in existing:
+            return {"ok": False, "error": f"请为 assetid {assetid} 填写大于 0 的有效购入价"}
+        name = item.get("market_hash_name") or item.get("name")
+        if not name:
+            return {"ok": False, "error": "库存物品缺少名称，请刷新库存"}
+        records.append({"assetid": assetid, "name": name, "price": prices[assetid] or 0,
+                        "at": time.time(), "pending_receipt": False})
+    try:
+        result = db_import_inventory_purchases(records)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, **result}
 def _get_steam_smart_price_cny(session, market_hash_name: str, app_id: int = 730):
     return get_steam_smart_price_cny(session, market_hash_name, app_id=app_id)
 def _enrich_inventory_with_steam_prices(items: list, old_items: list) -> None:
