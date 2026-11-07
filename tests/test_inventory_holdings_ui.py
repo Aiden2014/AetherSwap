@@ -184,3 +184,50 @@ def test_large_batch_scrolls_items_while_actions_remain_visible(page):
     for button in ['inventory-holdings-save', 'inventory-holdings-cancel']:
         box = page.locator('#' + button).bounding_box()
         assert box['y'] >= 0 and box['y'] + box['height'] <= page.viewport_size['height']
+
+
+def test_case_cost_choice_survives_sync_and_submits_current_inventory_asset(page):
+    page.evaluate('''() => {
+      const original = fetchJson;
+      fetchJson = (url, options) => url.endsWith('/preview') ? Promise.resolve({ok: true, items: [
+        {assetid: '111', name: 'Fracture Case', source: 'buff_choices', price: null,
+         price_candidates: [{price: 2.13, count: 1}, {price: 2.14, count: 2}]},
+      ]}) : original(url, options);
+    }''')
+    page.locator('#inv-table .inv-select').first.check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert '多个成交价' in page.locator('#inventory-holdings-status').inner_text()
+    assert '未找到' not in page.locator('#inventory-holdings-status').inner_text()
+    assert page.locator('.inv-holding-price').input_value() == ''
+    page.locator('.inv-holding-price-choice').select_option('2.13')
+    assert page.locator('.inv-holding-price').input_value() == '2.13'
+    assert page.locator('.inv-holding-source').inner_text() == '已选 BUFF 成交价'
+    page.locator('#inventory-holdings-sync').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-price-choice').input_value() == '2.13'
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [{'assetid': '111', 'price': 2.13}]
+
+
+def test_capsule_reference_is_labelled_and_manual_edits_override_case_choices(page):
+    page.evaluate('''() => {
+      const original = fetchJson;
+      fetchJson = (url, options) => url.endsWith('/preview') ? Promise.resolve({ok: true, items: [
+        {assetid: '111', name: 'Antwerp 2022 Contenders Autograph Capsule', source: 'buff_same_price', price: 2.8,
+         price_candidates: [{price: 2.8, count: 2}]},
+        {assetid: '222', name: 'Fracture Case', source: 'buff_choices', price: null,
+         price_candidates: [{price: 2.13, count: 1}, {price: 2.14, count: 2}]},
+      ]}) : original(url, options);
+    }''')
+    page.locator('#inv-table .inv-select').nth(0).check()
+    page.locator('#inv-table .inv-select').nth(1).check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-price').first.input_value() == '2.80'
+    assert page.locator('.inv-holding-source').first.inner_text() == 'BUFF 同款同价'
+    page.locator('.inv-holding-price-choice').select_option('2.14')
+    page.locator('.inv-holding-price').nth(1).fill('3.00')
+    assert page.locator('.inv-holding-price-choice').input_value() == ''
+    assert page.locator('.inv-holding-source').nth(1).inner_text() == '手动填写'

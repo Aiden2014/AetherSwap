@@ -1544,9 +1544,17 @@ textarea.app-modal-input {
   white-space: nowrap;
 }
 
-#inventory-holdings-table .inv-holding-price {
+#inventory-holdings-table .inv-holding-price,
+#inventory-holdings-table .inv-holding-price-choice {
   width: 100%;
   min-width: 0;
+}
+
+#inventory-holdings-table .inv-holding-price-choice {
+  margin-bottom: 8px;
+  padding-left: 8px;
+  padding-right: 8px;
+  font-size: 12px;
 }
 
 .inventory-holdings-actions {

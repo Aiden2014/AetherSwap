@@ -29,13 +29,14 @@ def test_inventory_scan_exposes_full_wear_seed_and_class(monkeypatch):
     monkeypatch.setattr(inventory_cs2,"fetch_cs2_inventory",lambda *_a: {
         "assets":[{"assetid":"new", "classid":"100", "instanceid":"200", "contextid":"16",
                    "asset_properties":[{"propertyid":2,"float_value":"0.315086483955383301"}, {"propertyid":1,"int_value":"805"}]}],
-        "descriptions":[{"classid":"100", "instanceid":"200", "market_hash_name":"Test Item"}],
+        "descriptions":[{"classid":"100", "instanceid":"200", "market_hash_name":"Test Item", "commodity": 1}],
     })
     ok, items, error=inventory_cs2.scan_cs2_inventory()
     assert ok, error
     assert items[0]["paintwear"] == "0.315086483955383301"
     assert items[0]["paintseed"] == "805"
     assert items[0]["classid"] == "100"
+    assert items[0]["commodity"] is True
 
 
 @pytest.mark.parametrize("method,url,expected", [

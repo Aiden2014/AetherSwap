@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from app import database, state
-from app.inventory_holdings import match_buff_purchases
+from app.inventory_holdings import match_buff_purchases, buff_commodity_prices
 from app.routes import inventory
 
 
@@ -195,3 +195,72 @@ def test_history_parameter_error_is_not_reported_as_login_failure():
     buyer._make_request = Mock(return_value={'code': 'Invalid Argument'})
     with pytest.raises(BuffPurchaseHistoryError, match='查询参数'):
         buyer.get_purchase_history_page()
+
+
+def commodity_item(assetid='new', name='Fracture Case', **patch):
+    return {'assetid': assetid, 'market_hash_name': name, 'paintwear': None, 'commodity': True, **patch}
+
+
+def commodity_order(bill='bill1', name='Fracture Case', price='2.14', **patch):
+    return order(bill, assetid='seller-' + bill, price=price,
+                 asset_info={'assetid': 'seller-' + bill},
+                 goods_info={'market_hash_name': name, 'tags': {'type': {'internal_name': 'csgo_type_weaponcase'}}}, **patch)
+
+
+def test_capsules_with_new_asset_ids_prefill_common_price_without_claiming_exact_bill():
+    name = 'Antwerp 2022 Contenders Autograph Capsule'
+    items = [commodity_item(name=name), commodity_item('another-new', name=name)]
+    orders = [commodity_order('one', name, '2.80'), commodity_order('two', name, '2.80'),
+              commodity_order('failed', name, '9.99', state='FAIL')]
+    assert match_buff_purchases(items, orders, '7656') == {}
+    result = buff_commodity_prices(items, orders, '7656')
+    assert set(result) == {'new', 'another-new'}
+    assert result['new'] == {'price': 2.8, 'source': 'buff_same_price', 'price_candidates': [{'price': 2.8, 'count': 2}]}
+
+
+def test_cases_with_multiple_costs_offer_choices_instead_of_an_arbitrary_price():
+    orders = [commodity_order('one', price='2.14'), commodity_order('two', price='2.13'), commodity_order('three', price='2.14')]
+    result = buff_commodity_prices([commodity_item()], orders, '7656')['new']
+    assert result['price'] is None and result['source'] == 'buff_choices'
+    assert result['price_candidates'] == [{'price': 2.13, 'count': 1}, {'price': 2.14, 'count': 2}]
+
+
+def test_container_tags_support_inventory_cached_before_commodity_metadata():
+    assert buff_commodity_prices([commodity_item(commodity=False)], [commodity_order()], '7656')['new']['price'] == 2.14
+
+
+@pytest.mark.parametrize('patch', [{'state': 'FAIL'}, {'progress': 106}, {'state': 'TO_DELIVER'},
+                                  {'buyer_steamid': 'other'}, {'buyer_steamid': ''}, {'price': 'nan'}])
+def test_commodity_price_reference_ignores_invalid_and_other_account_orders(patch):
+    orders = [commodity_order(**patch)]
+    assert buff_commodity_prices([commodity_item()], orders, '7656') == {}
+
+
+def test_commodity_reference_does_not_treat_a_skin_missing_properties_as_a_container():
+    assert buff_commodity_prices([skin(paintwear=None)], [order()], '7656') == {}
+    assert buff_commodity_prices([commodity_item()], [commodity_order(name='Other Case')], '7656') == {}
+
+
+def test_commodity_order_repeated_across_pages_counts_once():
+    row = commodity_order()
+    result = buff_commodity_prices([commodity_item()], [row, row], '7656')['new']
+    assert result['price_candidates'] == [{'price': 2.14, 'count': 1}]
+
+
+def test_preview_exposes_commodity_prices_and_exact_matches_take_precedence(client, monkeypatch):
+    from app import config_loader
+    from app.services import buff_client
+    monkeypatch.setattr(inventory, 'get_inventory', lambda: [commodity_item('123'), commodity_item('456')])
+    monkeypatch.setattr(config_loader, 'get_buff_credentials', lambda: {'cookies': 'mock'})
+    monkeypatch.setattr(inventory, 'load_app_config_validated', lambda: {})
+    remote = Mock()
+    orders = [commodity_order('one', price='2.13'), commodity_order('two', price='2.14')]
+    orders[0]['asset_info']['new_assetid'] = '123'
+    remote.get_purchase_history_page.return_value = {'items': orders, 'total_page': 1}
+    monkeypatch.setattr(buff_client, 'create_buff_client_from_config', lambda *args: remote)
+    result = client.post('/api/inventory/holdings/preview', json={'assetids': ['123', '456']}).json()
+    assert result['items'][0]['source'] == 'buff'
+    assert result['items'][0]['price'] == 2.13
+    assert result['items'][1]['source'] == 'buff_choices'
+    assert result['items'][1]['price'] is None
+    assert len(result['items'][1]['price_candidates']) == 2

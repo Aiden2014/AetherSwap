@@ -86,6 +86,7 @@ def scan_cs2_inventory() -> Tuple[bool, List[Dict[str, Any]], str]:
                 "appid": int(asset.get("appid", CS2_APP_ID)),
                 "contextid": str(asset.get("contextid", "")),
                 "marketable": marketable,
+                "commodity": int(desc.get("commodity") or 0) == 1,
                 "tradable": tradable,
                 "cooldown_text": cd_text,
                 "cooldown_at": cd_ts or None,

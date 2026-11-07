@@ -65,3 +65,50 @@ def match_buff_purchases(items, orders, steam_id, all_inventory=None):
         if bills.count(str(order["id"])) == 1:
             matches[assetid] = order
     return matches
+
+
+def buff_commodity_prices(items, orders, steam_id):
+    """Offer same-product costs when fungible items have no recipient ID mapping.
+
+    A common price is safe to prefill as a product price reference. Different
+    costs require the user's selection; neither path claims an exact bill match.
+    """
+    by_name = {}
+    for order in orders:
+        if (not isinstance(order, dict) or order.get("state") != "SUCCESS"
+                or str(order.get("progress")) in {"104", "105", "106"}
+                or not steam_id or str(order.get("buyer_steamid") or "") != steam_id):
+            continue
+        asset = order.get("asset_info") or {}
+        goods = order.get("goods_info") or {}
+        if not isinstance(asset, dict) or not isinstance(goods, dict):
+            continue
+        name = asset.get("market_hash_name") or goods.get("market_hash_name")
+        bill = str(order.get("id") or "").strip()
+        price = positive_price(order.get("price"))
+        if name and bill and price:
+            by_name.setdefault(name, {}).setdefault(bill, order)
+    result = {}
+    for item in items:
+        rows = list(by_name.get(item.get("market_hash_name"), {}).values())
+        if not rows or item.get("paintwear") is not None:
+            continue
+        # BUFF's container tag also supports inventory cached before commodity
+        # was exposed by the Steam scanner. Never infer this from an item name.
+        is_container = all(
+            (((row.get("goods_info") or {}).get("tags") or {}).get("type") or {}).get("internal_name", "").lower()
+            == "csgo_type_weaponcase" for row in rows
+        )
+        if not item.get("commodity") and not is_container:
+            continue
+        counts = {}
+        for row in rows:
+            price = positive_price(row.get("price"))
+            counts[price] = counts.get(price, 0) + 1
+        choices = [{"price": price, "count": counts[price]} for price in sorted(counts)]
+        result[str(item["assetid"])] = {
+            "price": choices[0]["price"] if len(choices) == 1 else None,
+            "source": "buff_same_price" if len(choices) == 1 else "buff_choices",
+            "price_candidates": choices,
+        }
+    return result

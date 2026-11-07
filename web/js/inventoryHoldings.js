@@ -23,12 +23,22 @@ function updateInventorySelection() {
   }
 }
 
+function inventoryHoldingsSourceLabel(row) {
+  if (row.exists) return '已存在，将跳过';
+  return { buff: 'BUFF 交易记录', buff_same_price: 'BUFF 同款同价', buff_choices: '选择 BUFF 成交价', buff_selected: '已选 BUFF 成交价' }[row.source] || '手动填写';
+}
+
 function renderInventoryHoldingsRows() {
   document.querySelector('#inventory-holdings-table tbody').innerHTML = inventoryHoldingsRows.map((row, index) => `
     <tr><td class="inv-holding-name">${escapeHtml(row.name)}</td><td class="mono inv-holding-assetid" data-label="assetid">${escapeHtml(row.assetid)}</td>
-      <td class="inv-holding-price-cell" data-label="购入价（¥ / 件）"><input type="number" class="inv-holding-price" data-index="${index}" aria-label="购入价" min="0.01" step="0.01"
+      <td class="inv-holding-price-cell" data-label="购入价（¥ / 件）">
+        ${!row.exists && row.price_candidates?.length > 1 ? `<select class="inv-holding-price-choice" data-index="${index}" aria-label="BUFF 成交价">
+          <option value="">选择 BUFF 成交价</option>
+          ${row.price_candidates.map(choice => `<option value="${Number(choice.price)}" ${row.source === 'buff_selected' && row.price === Number(choice.price) ? 'selected' : ''}>¥${Number(choice.price).toFixed(2)}（${Number(choice.count)} 笔）</option>`).join('')}
+        </select>` : ''}
+        <input type="number" class="inv-holding-price" data-index="${index}" aria-label="购入价" min="0.01" step="0.01"
         value="${row.price > 0 ? Number(row.price).toFixed(2) : ''}" placeholder="手动填写" ${row.exists ? 'disabled' : ''}></td>
-      <td class="inv-holding-source-cell" data-label="价格来源"><span class="inv-holding-source">${row.exists ? '已存在，将跳过' : row.source === 'buff' ? 'BUFF 交易记录' : '手动填写'}</span></td></tr>
+      <td class="inv-holding-source-cell" data-label="价格来源"><span class="inv-holding-source">${inventoryHoldingsSourceLabel(row)}</span></td></tr>
   `).join('');
 }
 
@@ -53,11 +63,18 @@ async function syncInventoryHoldingsPrices() {
     const previous = new Map(inventoryHoldingsRows.map(row => [row.assetid, row]));
     inventoryHoldingsRows = result.items.map(row => {
       const old = previous.get(row.assetid);
-      return old?.manualEdited ? { ...row, price: old.price, source: 'manual', manualEdited: true } : row;
+      return old?.manualEdited ? { ...row, price: old.price, source: old.source, manualEdited: true } : row;
     });
     renderInventoryHoldingsRows();
-    const missing = inventoryHoldingsRows.filter(row => !row.exists && !row.price).length;
-    el('inventory-holdings-status').textContent = [result.warning, missing ? `${missing} 件未找到唯一匹配的购入记录，请手动填价。` : '价格已就绪，可修改后添加。'].filter(Boolean).join(' ');
+    const needsChoice = inventoryHoldingsRows.filter(row => !row.exists && !row.price && row.price_candidates?.length > 1).length;
+    const missing = inventoryHoldingsRows.filter(row => !row.exists && !row.price && !(row.price_candidates?.length > 1)).length;
+    const samePrice = inventoryHoldingsRows.filter(row => !row.exists && row.source === 'buff_same_price').length;
+    el('inventory-holdings-status').textContent = [result.warning,
+      samePrice ? `${samePrice} 件已按查询到的 BUFF 同款同价记录填入，请核对。` : '',
+      needsChoice ? `${needsChoice} 件同款存在多个成交价，请从 BUFF 成交价中选择或手动填价。` : '',
+      missing ? `${missing} 件未找到唯一匹配的购入记录，请手动填价。` : '',
+      !needsChoice && !missing ? '价格已就绪，可修改后添加。' : '',
+    ].filter(Boolean).join(' ');
   } catch (error) {
     if (request === inventoryHoldingsRequest) el('inventory-holdings-status').textContent = `${error.message || '同步失败'}；可直接手动填价。`;
   } finally {
@@ -88,7 +105,19 @@ document.addEventListener('DOMContentLoaded', () => {
     row.price = event.target.value === '' ? null : Number(event.target.value);
     row.source = 'manual';
     row.manualEdited = true;
+    const choice = event.target.closest('tr').querySelector('.inv-holding-price-choice');
+    if (choice) choice.value = '';
     event.target.closest('tr').querySelector('.inv-holding-source').textContent = '手动填写';
+  });
+  el('inventory-holdings-table')?.addEventListener('change', event => {
+    if (!event.target.matches('.inv-holding-price-choice') || !event.target.value) return;
+    const row = inventoryHoldingsRows[Number(event.target.dataset.index)];
+    row.price = Number(event.target.value);
+    row.source = 'buff_selected';
+    row.manualEdited = true;
+    const tr = event.target.closest('tr');
+    tr.querySelector('.inv-holding-price').value = row.price.toFixed(2);
+    tr.querySelector('.inv-holding-source').textContent = inventoryHoldingsSourceLabel(row);
   });
   el('inventory-holdings-sync')?.addEventListener('click', syncInventoryHoldingsPrices);
   el('inventory-holdings-manual')?.addEventListener('click', () => {

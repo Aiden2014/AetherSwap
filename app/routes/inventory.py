@@ -35,7 +35,7 @@ def _selected_inventory(assetids):
 @router.post("/api/inventory/holdings/preview")
 def api_inventory_holdings_preview(body: InventoryPurchasePreview):
     from app.state import get_purchases
-    from app.inventory_holdings import match_buff_purchases, positive_price
+    from app.inventory_holdings import match_buff_purchases, positive_price, buff_commodity_prices
     from buff import BuffAuthExpired, BuffRateLimited, BuffVerificationRequired, BuffRequestBlocked
     from buff.buyer import BuffPurchaseHistoryError
     from requests.exceptions import RequestException
@@ -45,7 +45,7 @@ def api_inventory_holdings_preview(body: InventoryPurchasePreview):
         return {"ok": False, "error": str(exc)}
     existing = {str(p.get("assetid") or "").strip() for p in get_purchases()}
     pending = [item for item in items if str(item["assetid"]) not in existing]
-    matches, warning = {}, ""
+    matches, commodity_prices, warning = {}, {}, ""
     if body.sync_buff and pending:
         from app.config_loader import get_buff_credentials
         from app.services.buff_client import create_buff_client_from_config
@@ -67,6 +67,10 @@ def api_inventory_holdings_preview(body: InventoryPurchasePreview):
                 else:
                     warning = f"已查询最近 {len(orders)} 条 BUFF 购入记录，较早的物品请手动填价"
                 matches = match_buff_purchases(pending, orders, str(get_steam_credentials().get("steam_id") or ""), get_inventory())
+                commodity_prices = buff_commodity_prices(
+                    [item for item in pending if str(item["assetid"]) not in matches],
+                    orders, str(get_steam_credentials().get("steam_id") or ""),
+                )
             except BuffAuthExpired:
                 warning = "BUFF 登录已过期，请重新登录后同步；也可直接手动填价"
             except BuffRateLimited as exc:
@@ -85,13 +89,17 @@ def api_inventory_holdings_preview(body: InventoryPurchasePreview):
             finally:
                 if client is not None:
                     client.close()
-    return {"ok": True, "warning": warning, "items": [
-        {"assetid": str(item["assetid"]), "name": item.get("name") or item.get("market_hash_name"),
-         "exists": str(item["assetid"]) in existing,
-         "price": positive_price(matches[str(item["assetid"])].get("price")) if str(item["assetid"]) in matches else None,
-         "source": "buff" if str(item["assetid"]) in matches else "manual"}
-        for item in items
-    ]}
+    preview = []
+    for item in items:
+        assetid = str(item["assetid"])
+        cost = {"price": None, "source": "manual", "price_candidates": []}
+        if assetid in matches:
+            cost.update(price=positive_price(matches[assetid].get("price")), source="buff")
+        elif assetid in commodity_prices:
+            cost.update(commodity_prices[assetid])
+        preview.append({"assetid": assetid, "name": item.get("name") or item.get("market_hash_name"),
+                        "exists": assetid in existing, **cost})
+    return {"ok": True, "warning": warning, "items": preview}
 
 
 @router.post("/api/inventory/holdings")
