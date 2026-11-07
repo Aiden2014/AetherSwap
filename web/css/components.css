@@ -321,6 +321,23 @@ body {
   animation: panelSlideIn 0.45s var(--ease-spring);
 }
 
+#panel-inventory.active {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#panel-inventory > .panel-toolbar {
+  flex-shrink: 0;
+}
+
+#panel-inventory > .table-container {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
 @keyframes panelFadeIn {
   from {
     opacity: 0;
