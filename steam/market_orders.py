@@ -646,16 +646,15 @@ def fetch_item_orders_histogram(
     last_error = ""
     
     for attempt in range(3):
-        if attempt == 0:
-            effective_proxies = None                                    
-        else:
-            effective_proxies = pm.get_proxies_for_request(failed=True) 
+        effective_proxies = pm.get_proxies_for_request(failed=(attempt > 0))
             
         try:
             r = session.get(
                 url, params=params, headers=headers,
                 timeout=timeout, proxies=effective_proxies, verify=False,
             )
+            if reason := _record_market_rate_limit(r):
+                return (None, reason) if return_error else None
             if r.status_code == 200:
                 any_success = True
                 data = r.json()

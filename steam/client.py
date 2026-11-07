@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import requests
 import urllib3
 from .request_policy import parse_retry_after
+from .session import get_market
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 CURRENCY_CNY = "CNY"
 CURRENCY_USD = "USD"
@@ -314,7 +315,7 @@ def fetch_history(
     if isinstance(cookies, str):
         cookies = _parse_cookie_str(cookies)
     try:
-        resp = requests.get(
+        resp = get_market(
             url,
             headers=h,
             verify=verify,

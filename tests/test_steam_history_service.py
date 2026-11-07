@@ -46,7 +46,7 @@ def environment(monkeypatch):
 
 def test_history_429_stops_retries_and_cools_down_other_candidates(monkeypatch, environment):
     get = Mock(return_value=response(429, None, {"Retry-After": "120"}))
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
 
     assert service.SteamClient().fetch_history("Item A") is None
     assert service.SteamClient().fetch_history("Item B") is None
@@ -68,7 +68,7 @@ def test_history_429_stops_retries_and_cools_down_other_candidates(monkeypatch, 
 
 def test_failed_history_is_reused_across_clients_then_expires(monkeypatch, environment):
     get = Mock(return_value=response(503, None))
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
 
     assert service.SteamClient().fetch_history("Item A", return_currency=True) is None
     assert service.SteamClient().fetch_history("Item A", return_currency=True) is None
@@ -81,7 +81,7 @@ def test_failed_history_is_reused_across_clients_then_expires(monkeypatch, envir
 @pytest.mark.parametrize("raw", [response(403, None), response(200, None)])
 def test_nontransient_history_failure_is_not_retried(monkeypatch, environment, raw):
     get = Mock(return_value=raw)
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
     assert service.SteamClient().fetch_history("Item A") is None
     assert get.call_count == 1
     environment.sleep.assert_not_called()
@@ -89,7 +89,7 @@ def test_nontransient_history_failure_is_not_retried(monkeypatch, environment, r
 
 def test_history_cache_isolated_after_cookie_or_account_change(monkeypatch, environment):
     get = Mock(return_value=response(body={"success": True, "prices": []}))
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
     history = service.SteamClient()
     assert history.fetch_history("Item A") == []
     assert history.fetch_history("Item A") == []
@@ -105,7 +105,7 @@ def test_history_cache_isolated_after_cookie_or_account_change(monkeypatch, envi
 
 def test_history_cache_respects_each_clients_ttl(monkeypatch, environment):
     get = Mock(return_value=response(body={"success": True, "prices": []}))
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
     assert service.SteamClient(cache_ttl=300).fetch_history("Item A") == []
     environment.now[0] += 6
     assert service.SteamClient(cache_ttl=5).fetch_history("Item A") == []
@@ -114,7 +114,7 @@ def test_history_cache_respects_each_clients_ttl(monkeypatch, environment):
 
 def test_short_429_cooldown_can_retry_same_item_after_server_delay(monkeypatch, environment):
     get = Mock(return_value=response(429, None, {"Retry-After": "5"}))
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
     assert service.SteamClient().fetch_history("Item A") is None
     environment.credentials["cookies"] = "sessionid=new-cookie"
     assert service.SteamClient().fetch_history("Item A") is None
@@ -134,7 +134,7 @@ def test_concurrent_history_cache_misses_send_one_request(monkeypatch, environme
         return response(body={"success": True, "prices": []})
 
     send = Mock(side_effect=get)
-    monkeypatch.setattr(client.requests, "get", send)
+    monkeypatch.setattr(client, "get_market", send)
 
     def fetch():
         start.wait(timeout=3)
@@ -151,7 +151,7 @@ def test_history_transport_retry_can_recover(monkeypatch, environment):
         requests.exceptions.Timeout("secret-cookie"),
         response(body={"success": True, "prices": []}),
     ])
-    monkeypatch.setattr(client.requests, "get", get)
+    monkeypatch.setattr(client, "get_market", get)
     assert service.SteamClient().fetch_history("Item A") == []
     assert get.call_count == 2
     environment.sleep.assert_called_once()

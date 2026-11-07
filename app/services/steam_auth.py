@@ -11,6 +11,7 @@ from typing import Optional, Tuple
 from urllib.parse import unquote, urlparse
 import urllib3
 import requests as _req
+from steam.session import create_steam_session
 from app.state import log
 from app.config_loader import (
     get_steam_credentials,
@@ -51,8 +52,7 @@ def _verify_steam_cookies_valid(cookie_str: str, steam_id: str = "") -> Optional
     cookie_steam_id = steam_id_from_cookie_str(cookie_str)
     if not cookie_steam_id or (steam_id and cookie_steam_id != steam_id):
         return False
-    session = _req.Session()
-    session.verify = False
+    session = create_steam_session()
     session.cookies.update(cookie_dict)
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -89,8 +89,7 @@ def fetch_steam_profile_via_api(steam_id: str, cookies_str: str) -> tuple:
     if not steam_id:
         return "", ""
     display_name, avatar_url = "", ""
-    session = _req.Session()
-    session.verify = False
+    session = create_steam_session()
     cookie_dict = {}
     for part in (cookies_str or "").split(";"):
         s = part.strip()
