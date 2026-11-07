@@ -572,6 +572,68 @@ def manual_buff_probe_allowed(
         )
 
 
+def recheck_legacy_buff_verification() -> bool:
+    """On explicit resume, probe the old generic flag without opening Chromium.
+
+    The circuit remains installed until a single user-info GET proves the saved
+    session is valid. Real risk controls, cooldowns and pending orders stay closed.
+    """
+    from buff import BuffAuthExpired, BuffBuyer, get_global_policy
+    from buff.request_policy import account_fingerprint
+    from app.services.buff_checkout_guard import buff_activity_guard, get_unresolved_checkout
+
+    auth_lock = get_buff_auth_lock()
+    if not auth_lock.acquire(blocking=False):
+        return False
+    try:
+        with buff_activity_guard():
+            status = get_status() or {}
+            if (
+                get_unresolved_checkout() is not None
+                or status.get("status") == "running"
+                or get_pending_payment()
+                or status.get("buff_auth_expired")
+            ):
+                return False
+            policy = get_global_policy()
+            account_key = account_fingerprint({}, account_id=BUFF_ACCOUNT_ID)
+            if not policy.has_legacy_verification(account_key):
+                return False
+            credentials = get_buff_credentials() or {}
+            cookies = str(credentials.get("cookies") or "")
+            if not cookies:
+                return False
+            buyer = BuffBuyer(
+                cookies, user_agent=credentials.get("user_agent") or None,
+                request_policy=policy, account_id=BUFF_ACCOUNT_ID,
+            )
+            try:
+                log("BUFF 检测到旧版验证记录，正在只读复查当前登录会话", "info", category="buff")
+                if not buyer.verify_session(revalidate_legacy_verification=True):
+                    raise ValueError("当前登录会话在线复查未通过，保留验证标记")
+                rotated = buyer.export_cookie_string()
+                if rotated and rotated != cookies:
+                    update_buff_creds(rotated, user_agent=buyer.user_agent)
+                if not policy.clear_legacy_verification(account_key):
+                    return False
+                set_buff_verification_required(False)
+                log("BUFF 当前登录有效，已清除旧版验证记录，无需重新打开浏览器", "info", category="buff")
+                return True
+            except BuffAuthExpired:
+                set_buff_auth_expired(True)
+                log("BUFF 只读复查确认登录已失效，请重新登录", "warn", category="buff")
+                return False
+            except Exception as exc:
+                reason = str(exc) or "BUFF 当前登录会话复查失败"
+                set_buff_verification_required(True, reason)
+                log(f"BUFF 只读复查未通过，保留验证状态：{reason}", "warn", category="buff")
+                return False
+            finally:
+                buyer.close()
+    finally:
+        auth_lock.release()
+
+
 def try_buff_auto_relogin() -> tuple[bool, str, str]:
     """Refresh a Playwright-managed BUFF session without profile races."""
 

@@ -35,6 +35,10 @@ class _State:
 
 @pytest.fixture(autouse=True)
 def _isolated_guard(monkeypatch, tmp_path):
+    import buff
+
+    policy = buff.BuffRequestPolicy(min_interval=0, persist=False)
+    monkeypatch.setattr(buff, "get_global_policy", lambda: policy)
     monkeypatch.setattr(guard, "_GUARD_PATH", tmp_path / "checkout.json")
     with pipeline._pipeline_start_lock:
         pipeline._pipeline_thread = None

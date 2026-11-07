@@ -6,8 +6,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolated_global_buff_policy(monkeypatch):
+def _isolated_global_buff_policy(monkeypatch, tmp_path):
     import buff
+    from app.services import buff_checkout_guard
+
+    monkeypatch.setattr(buff_checkout_guard, "_GUARD_PATH", tmp_path / "checkout.json")
 
     policy = buff.BuffRequestPolicy(
         min_interval=0.0,

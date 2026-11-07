@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_REQUEST_INTERVAL = 2.0
 DEFAULT_RATE_LIMIT_SECONDS = 300.0
+LEGACY_VERIFICATION_MESSAGE = "Buff 需要刷新页面或完成人机验证"
 DEFAULT_POLICY_STATE_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "buff_request_policy.json"
 )
@@ -253,12 +254,17 @@ class BuffRequestPolicy:
             return self._account_locks.setdefault(account_key, threading.RLock())
 
     @contextmanager
-    def request_slot(self, account_key: str) -> Iterator[None]:
+    def request_slot(
+        self, account_key: str, *, legacy_verification_probe: bool = False,
+    ) -> Iterator[None]:
         """Hold the account lock for one complete HTTP request."""
 
         lock = self._account_lock(account_key)
         with lock:
-            self.raise_if_blocked(account_key)
+            if not legacy_verification_probe or not self.has_legacy_verification(account_key):
+                self.raise_if_blocked(account_key)
+                if legacy_verification_probe:
+                    raise BuffRequestBlocked("当前状态不允许旧版验证记录复查")
             previous = self._last_started.get(account_key)
             if previous is not None:
                 remaining = self.min_interval - (self._clock() - previous)
@@ -268,6 +274,26 @@ class BuffRequestPolicy:
             # connection attempts, can never be closer than the hard interval.
             self._last_started[account_key] = self._clock()
             yield
+
+    def has_legacy_verification(self, account_key: str) -> bool:
+        """Recognize only the old raw-body scanner's generic verification flag."""
+        with self._guard:
+            state = self._circuits.get(account_key)
+            return bool(
+                not self._state_invalid
+                and state is not None
+                and state.reason == "verification"
+                and state.message == LEGACY_VERIFICATION_MESSAGE
+                and state.status_code is None
+            )
+
+    def clear_legacy_verification(self, account_key: str) -> bool:
+        """Clear the legacy flag only after a successful read-only login probe."""
+        with self._account_lock(account_key), self._guard:
+            if not self.has_legacy_verification(account_key):
+                return False
+            self.clear(account_key)
+            return True
 
     def raise_if_blocked(self, account_key: str) -> None:
         with self._guard:

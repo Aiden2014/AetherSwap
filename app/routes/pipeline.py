@@ -10,6 +10,9 @@ class ConfigBody(BaseModel):
     buff_reconciliation_intent_id: str = ""
 @router.post("/api/pipeline/start")
 def api_pipeline_start(body: ConfigBody):
+    from app.services.buff_auth import recheck_legacy_buff_verification
+
+    recheck_legacy_buff_verification()
     blocker = get_pipeline_start_blocker()
     if (
         blocker.get("code") == "BUFF_RECONCILIATION_REQUIRED"

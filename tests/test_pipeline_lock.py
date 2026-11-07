@@ -1,5 +1,17 @@
 import threading
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_buff_checkout(monkeypatch, tmp_path):
+    import buff
+    from app.services import buff_checkout_guard
+
+    monkeypatch.setattr(buff_checkout_guard, "_GUARD_PATH", tmp_path / "checkout.json")
+    policy = buff.BuffRequestPolicy(min_interval=0, persist=False)
+    monkeypatch.setattr(buff, "get_global_policy", lambda: policy)
+
 
 def test_start_pipeline_rejects_duplicate_running_pipeline(monkeypatch):
     from app import pipeline

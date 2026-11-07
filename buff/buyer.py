@@ -364,11 +364,15 @@ class BuffBuyer:
         method = method.upper()
         headers_override = kwargs.pop("headers", None)
         with_cashier_trace_id = bool(kwargs.pop("with_cashier_trace_id", False))
+        legacy_probe = bool(kwargs.pop("legacy_verification_probe", False))
         verify = kwargs.pop("verify", self.use_ssl)
         timeout = kwargs.pop("timeout", self.request_timeout)
         is_write = method not in _SAFE_METHODS
 
-        with self.request_policy.request_slot(self.account_key):
+        if legacy_probe and (method != "GET" or url != API_USER_INFO):
+            raise BuffRequestBlocked("旧版验证记录复查只允许读取当前用户信息")
+        slot_options = {"legacy_verification_probe": True} if legacy_probe else {}
+        with self.request_policy.request_slot(self.account_key, **slot_options):
             # Cookie state and the outbound CSRF header must be captured only
             # after this account owns the request slot.  Otherwise a waiting
             # writer can retain a token rotated by the preceding response.
@@ -573,6 +577,8 @@ class BuffBuyer:
                     status_code=status_code,
                 )
 
+            if legacy_probe and status_code != 200:
+                raise BuffVerificationRequired(f"BUFF 登录会话复查返回 HTTP {status_code}，保留旧验证状态")
             if not json_ok:
                 return {
                     "code": "HTTP_" + str(status_code),
@@ -580,7 +586,9 @@ class BuffBuyer:
                 }
             return data
 
-    def verify_session(self, game: str = "csgo") -> bool:
+    def verify_session(
+        self, game: str = "csgo", *, revalidate_legacy_verification: bool = False,
+    ) -> bool:
         """Verify credentials through BUFF's current user-info endpoint."""
 
         # BUFF's own web client uses this read-only endpoint to load the signed-
@@ -591,6 +599,7 @@ class BuffBuyer:
             API_USER_INFO,
             params={"meta_list": "buy_order_state"},
             headers={"Referer": "https://buff.163.com/"},
+            legacy_verification_probe=revalidate_legacy_verification,
         )
         data = response.get("data")
         user_info = data.get("user_info") if isinstance(data, dict) else None

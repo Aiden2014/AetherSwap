@@ -722,6 +722,9 @@ def start_pipeline(
                         )
                     except BuffCheckoutGuardMismatch:
                         return False
+                from app.services.buff_auth import recheck_legacy_buff_verification
+
+                recheck_legacy_buff_verification()
                 if get_pipeline_start_blocker():
                     return False
                 # Mark activity while holding the same auth/activity slots used
