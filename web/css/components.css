@@ -1509,6 +1509,7 @@ textarea.app-modal-input {
 
 .inventory-holdings-modal > h3,
 .inventory-holdings-modal > p,
+.inventory-holdings-selection,
 .inventory-holdings-actions {
   flex-shrink: 0;
 }
@@ -1536,6 +1537,36 @@ textarea.app-modal-input {
 #inventory-holdings-table .inv-holding-name {
   line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.inventory-holdings-selection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.inventory-holdings-selection label,
+.inv-holding-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.inventory-holdings-modal input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--border-focus);
+  cursor: pointer;
+}
+
+.inv-holding-item span {
+  min-width: 0;
 }
 
 #inventory-holdings-table .inv-holding-assetid,

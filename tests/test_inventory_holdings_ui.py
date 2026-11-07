@@ -119,7 +119,7 @@ def test_market_prices_update_price_column_by_english_name(page):
     assert page.locator('#inv-table tbody tr').first.locator('td').nth(2).inner_text() == '111'
 
 
-def test_manual_entry_can_proceed_while_buff_query_is_pending(page):
+def test_manual_edits_survive_pending_buff_query_without_manual_button(page):
     page.evaluate('''() => {
       const original = fetchJson;
       fetchJson = (url, options) => url.endsWith('/preview')
@@ -127,13 +127,58 @@ def test_manual_entry_can_proceed_while_buff_query_is_pending(page):
     }''')
     page.locator('#inv-table .inv-select').first.check()
     page.locator('#btn-inventory-add-holdings').click()
-    page.locator('#inventory-holdings-manual').click()
+    assert page.locator('#inventory-holdings-manual').count() == 0
+    assert page.locator('#inventory-holdings-remove').is_disabled()
     page.locator('.inv-holding-price').fill('8.76')
+    page.evaluate("finishPreview({ok: true, items: [{assetid: '111', name: '物品 111', price: 12.34, source: 'buff'}]})")
+    page.wait_for_function('!inventoryHoldingsBusy')
     page.locator('#inventory-holdings-save').click()
     page.wait_for_function('window.savedImports.length === 1')
     assert page.evaluate('savedImports[0]') == [{'assetid': '111', 'price': 8.76}]
-    page.evaluate("finishPreview({ok: true, items: [], warning: ''})")
     assert page.locator('#inventory-holdings-overlay').is_hidden()
+
+
+def test_batch_removal_preserves_remaining_price_and_excludes_removed_items_from_sync_and_save(page):
+    page.locator('#inv-select-all').check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    page.locator('.inv-holding-price').first.fill('18.75')
+    page.locator('.inv-holding-select').nth(1).check()
+    page.locator('.inv-holding-select').nth(2).check()
+    assert page.locator('#inventory-holdings-select-all').evaluate('node => node.indeterminate')
+    assert page.locator('#inventory-holdings-remove').inner_text() == '移除所选（2）'
+    page.locator('#inventory-holdings-remove').click()
+    assert page.locator('.inv-holding-select').count() == 1
+    assert page.locator('.inv-holding-price').input_value() == '18.75'
+    assert page.locator('#inv-table .inv-select:checked').count() == 3
+    page.locator('#inventory-holdings-sync').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-select').count() == 1
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [{'assetid': '111', 'price': 18.75}]
+
+
+def test_select_all_removal_disables_empty_submission_and_resets_when_reopened(page):
+    page.locator('#inv-select-all').check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    page.locator('#inventory-holdings-select-all').check()
+    assert page.locator('.inv-holding-select:checked').count() == 3
+    page.locator('#inventory-holdings-select-all').uncheck()
+    assert page.locator('.inv-holding-select:checked').count() == 0
+    assert page.locator('#inventory-holdings-remove').is_disabled()
+    page.locator('#inventory-holdings-select-all').check()
+    page.locator('#inventory-holdings-remove').click()
+    assert '列表为空' in page.locator('#inventory-holdings-table tbody').inner_text()
+    for control in ['save', 'sync', 'select-all', 'remove']:
+        assert page.locator('#inventory-holdings-' + control).is_disabled()
+    assert page.evaluate('savedImports.length') == 0
+    page.locator('#inventory-holdings-cancel').click()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert page.locator('.inv-holding-select').count() == 3
+    assert page.locator('.inv-holding-select:checked').count() == 0
 
 
 def test_dialog_layout_keeps_long_item_names_and_status_readable(page, tmp_path):

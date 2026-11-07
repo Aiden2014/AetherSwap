@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/variables.css" />
   <link rel="stylesheet" href="/css/base.css" />
   <link rel="stylesheet" href="/css/layout.css?v=2" />
-  <link rel="stylesheet" href="/css/components.css?v=4" />
+  <link rel="stylesheet" href="/css/components.css?v=5" />
   <link rel="stylesheet" href="/css/animations.css" />
   <style>
     /* Nav badge */
@@ -1718,6 +1718,10 @@
       <p class="muted small">自动匹配 BUFF 已完成的购入记录，可逐件修改购入价（人民币）。已有相同 assetid 的记录会跳过。</p>
       <p class="muted small">胶囊、武器箱等同款价格一致时自动填入；存在多个成交价时，请选择或手动填写。</p>
       <p id="inventory-holdings-status" class="muted small" role="status"></p>
+      <div class="inventory-holdings-selection">
+        <label><input id="inventory-holdings-select-all" type="checkbox" /> 全选列表物品</label>
+        <button type="button" id="inventory-holdings-remove" class="btn btn-secondary" disabled>移除所选（0）</button>
+      </div>
       <div class="table-container">
         <table id="inventory-holdings-table">
           <thead><tr><th>物品名称</th><th>assetid</th><th>购入价（¥ / 件）</th><th>价格来源</th></tr></thead>
@@ -1726,7 +1730,6 @@
       </div>
       <div class="inventory-holdings-actions">
         <button type="button" id="inventory-holdings-sync" class="btn btn-secondary">同步 BUFF 购入价</button>
-        <button type="button" id="inventory-holdings-manual" class="btn btn-secondary">直接手动填价</button>
         <button type="button" id="inventory-holdings-cancel" class="btn btn-secondary">取消</button>
         <button type="button" id="inventory-holdings-save" class="btn btn-primary">添加到持有饰品</button>
       </div>
@@ -1813,7 +1816,7 @@
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
   <script src="/js/main.js?v=6"></script>
-  <script src="/js/inventoryHoldings.js?v=4"></script>
+  <script src="/js/inventoryHoldings.js?v=5"></script>
   <script src="/js/gift.js"></script>
   <script src="/js/steamDeals.js"></script>
   <script>

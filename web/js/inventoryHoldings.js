@@ -30,7 +30,7 @@ function inventoryHoldingsSourceLabel(row) {
 
 function renderInventoryHoldingsRows() {
   document.querySelector('#inventory-holdings-table tbody').innerHTML = inventoryHoldingsRows.map((row, index) => `
-    <tr><td class="inv-holding-name">${escapeHtml(row.name)}</td><td class="mono inv-holding-assetid" data-label="assetid">${escapeHtml(row.assetid)}</td>
+    <tr><td class="inv-holding-name"><label class="inv-holding-item"><input type="checkbox" class="inv-holding-select" data-index="${index}" aria-label="选择 ${escapeHtml(row.name)}" ${row.removeSelected ? 'checked' : ''}><span>${escapeHtml(row.name)}</span></label></td><td class="mono inv-holding-assetid" data-label="assetid">${escapeHtml(row.assetid)}</td>
       <td class="inv-holding-price-cell" data-label="购入价（¥ / 件）">
         ${!row.exists && row.price_candidates?.length > 1 ? `<select class="inv-holding-price-choice" data-index="${index}" aria-label="BUFF 成交价">
           <option value="">选择 BUFF 成交价</option>
@@ -39,19 +39,35 @@ function renderInventoryHoldingsRows() {
         <input type="number" class="inv-holding-price" data-index="${index}" aria-label="购入价" min="0.01" step="0.01"
         value="${row.price > 0 ? Number(row.price).toFixed(2) : ''}" placeholder="手动填写" ${row.exists ? 'disabled' : ''}></td>
       <td class="inv-holding-source-cell" data-label="价格来源"><span class="inv-holding-source">${inventoryHoldingsSourceLabel(row)}</span></td></tr>
-  `).join('');
+  `).join('') || '<tr><td colspan="4" class="muted">列表为空，请从库存中重新选择物品。</td></tr>';
+  updateInventoryHoldingsSelection();
+}
+
+function updateInventoryHoldingsSelection() {
+  const count = inventoryHoldingsRows.filter(row => row.removeSelected).length;
+  const all = el('inventory-holdings-select-all');
+  all.checked = inventoryHoldingsRows.length > 0 && count === inventoryHoldingsRows.length;
+  all.indeterminate = count > 0 && count < inventoryHoldingsRows.length;
+  all.disabled = inventoryHoldingsBusy || !inventoryHoldingsRows.length;
+  document.querySelectorAll('.inv-holding-select').forEach(input => { input.disabled = inventoryHoldingsBusy; });
+  const remove = el('inventory-holdings-remove');
+  remove.disabled = inventoryHoldingsBusy || !count;
+  remove.textContent = `移除所选（${count}）`;
+  for (const id of ['inventory-holdings-save', 'inventory-holdings-sync']) {
+    el(id).disabled = inventoryHoldingsBusy || !inventoryHoldingsRows.length;
+  }
 }
 
 function setInventoryHoldingsBusy(busy) {
   inventoryHoldingsBusy = busy;
-  for (const id of ['inventory-holdings-save', 'inventory-holdings-sync', 'inventory-holdings-cancel', 'inventory-holdings-manual']) el(id).disabled = busy;
+  el('inventory-holdings-cancel').disabled = busy;
+  updateInventoryHoldingsSelection();
 }
 
 async function syncInventoryHoldingsPrices() {
-  if (inventoryHoldingsBusy) return;
+  if (inventoryHoldingsBusy || !inventoryHoldingsRows.length) return;
   const request = ++inventoryHoldingsRequest;
   setInventoryHoldingsBusy(true);
-  el('inventory-holdings-manual').disabled = false;
   el('inventory-holdings-cancel').disabled = false;
   el('inventory-holdings-status').textContent = '正在查询 BUFF 购入记录…';
   try {
@@ -63,7 +79,8 @@ async function syncInventoryHoldingsPrices() {
     const previous = new Map(inventoryHoldingsRows.map(row => [row.assetid, row]));
     inventoryHoldingsRows = result.items.map(row => {
       const old = previous.get(row.assetid);
-      return old?.manualEdited ? { ...row, price: old.price, source: old.source, manualEdited: true } : row;
+      return { ...row, removeSelected: old?.removeSelected,
+        ...(old?.manualEdited ? { price: old.price, source: old.source, manualEdited: true } : {}) };
     });
     renderInventoryHoldingsRows();
     const needsChoice = inventoryHoldingsRows.filter(row => !row.exists && !row.price && row.price_candidates?.length > 1).length;
@@ -110,6 +127,11 @@ document.addEventListener('DOMContentLoaded', () => {
     event.target.closest('tr').querySelector('.inv-holding-source').textContent = '手动填写';
   });
   el('inventory-holdings-table')?.addEventListener('change', event => {
+    if (event.target.matches('.inv-holding-select')) {
+      inventoryHoldingsRows[Number(event.target.dataset.index)].removeSelected = event.target.checked;
+      updateInventoryHoldingsSelection();
+      return;
+    }
     if (!event.target.matches('.inv-holding-price-choice') || !event.target.value) return;
     const row = inventoryHoldingsRows[Number(event.target.dataset.index)];
     row.price = Number(event.target.value);
@@ -120,10 +142,16 @@ document.addEventListener('DOMContentLoaded', () => {
     tr.querySelector('.inv-holding-source').textContent = inventoryHoldingsSourceLabel(row);
   });
   el('inventory-holdings-sync')?.addEventListener('click', syncInventoryHoldingsPrices);
-  el('inventory-holdings-manual')?.addEventListener('click', () => {
-    ++inventoryHoldingsRequest;
-    setInventoryHoldingsBusy(false);
-    el('inventory-holdings-status').textContent = '请逐件填写购入价（人民币），已有记录会自动跳过。';
+  el('inventory-holdings-select-all')?.addEventListener('change', event => {
+    inventoryHoldingsRows.forEach(row => { row.removeSelected = event.target.checked; });
+    renderInventoryHoldingsRows();
+  });
+  el('inventory-holdings-remove')?.addEventListener('click', () => {
+    if (inventoryHoldingsBusy) return;
+    const count = inventoryHoldingsRows.filter(row => row.removeSelected).length;
+    inventoryHoldingsRows = inventoryHoldingsRows.filter(row => !row.removeSelected);
+    renderInventoryHoldingsRows();
+    el('inventory-holdings-status').textContent = `已从本次添加列表移除 ${count} 件，剩余 ${inventoryHoldingsRows.length} 件。`;
   });
   el('inventory-holdings-cancel')?.addEventListener('click', () => {
     ++inventoryHoldingsRequest;
@@ -131,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     el('inventory-holdings-overlay').classList.add('hidden');
   });
   el('inventory-holdings-save')?.addEventListener('click', async () => {
-    if (inventoryHoldingsBusy) return;
+    if (inventoryHoldingsBusy || !inventoryHoldingsRows.length) return;
     const invalid = inventoryHoldingsRows.find(row => !row.exists && (!Number.isFinite(row.price) || row.price < 0.01));
     if (invalid) {
       el('inventory-holdings-status').textContent = `请为 ${invalid.name}（${invalid.assetid}）填写有效购入价。`;
