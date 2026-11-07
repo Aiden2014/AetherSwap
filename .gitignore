@@ -27,6 +27,7 @@ config/steam_deals_checkpoint.json.tmp
 log/
 
 # Python
+.env.local
 __pycache__/
 *.py[cod]
 .venv/
