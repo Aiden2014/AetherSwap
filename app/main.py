@@ -81,12 +81,13 @@ def __getattr__(name: str):
 
 def run_server(host: str | None = None, port: int | None = None) -> None:
     profile = get_runtime_profile()
-    uvicorn.run(
-        "app.api:app",
-        host=host or get_bind_host(profile),
-        port=port or get_port(),
-        log_level="warning",
-    )
+    _create_server(host or get_bind_host(profile), port or get_port()).run()
+
+
+def _create_server(host: str, port: int):
+    return uvicorn.Server(uvicorn.Config(
+        "app.api:app", host=host, port=port, log_level="warning",
+    ))
 
 
 def _wait_for_server_thread(thread: threading.Thread) -> None:
@@ -101,12 +102,27 @@ def _probe_host(host: str) -> str:
     return "127.0.0.1" if host in {"0.0.0.0", "::"} else host
 
 
-def _wait_for_server_ready(thread: threading.Thread, host: str, port: int, timeout: float = 20.0) -> bool:
+def _is_server_listening(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((_probe_host(host), port), timeout=0.35):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_for_server_ready(thread: threading.Thread, host: str, port: int, timeout: float = 20.0, *, server=None) -> bool:
     probe_host = _probe_host(host)
     deadline = time.monotonic() + max(0.1, timeout)
     while time.monotonic() < deadline:
         if not thread.is_alive():
             return False
+        if server is not None:
+            # An older process may already own the port. Only our own server's
+            # startup flag proves this GUI will share its notification state.
+            if server.started:
+                return True
+            time.sleep(0.15)
+            continue
         try:
             with socket.create_connection((probe_host, port), timeout=0.35):
                 return True
@@ -137,9 +153,16 @@ def main() -> None:
         run_server(host, port)
         return
 
-    thread = threading.Thread(target=run_server, args=(host, port), daemon=True)
+    if _is_server_listening(host, port):
+        print(f"端口 {port} 已被占用，本次未启动新的桌面窗口。")
+        print("若此前关闭过 AetherSwap 窗口，旧后台可能仍在运行；请先在原终端按 Ctrl+C 完整退出，再重新启动。")
+        print(f"原后台控制台地址: {local_url}")
+        return
+
+    server = _create_server(host, port)
+    thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    if not _wait_for_server_ready(thread, host, port):
+    if not _wait_for_server_ready(thread, host, port, server=server):
         if thread.is_alive():
             print(f"后端启动时间过长，暂不自动打开浏览器。服务就绪后请手动访问 {local_url}。")
             _wait_for_server_thread(thread)
@@ -149,14 +172,20 @@ def main() -> None:
 
     webview, webview_error = _load_webview()
     if webview:
+        from app.desktop_notify import set_desktop_window
+
         try:
-            webview.create_window("aetherswap", local_url, width=1280, height=800, zoomable=True, maximized=True)
+            window = webview.create_window("aetherswap", local_url, width=1280, height=800, zoomable=True, maximized=True)
+            set_desktop_window(window)
+            window.events.closed += lambda: set_desktop_window(None)
             webview.start()
             print(f"窗口已关闭，后端仍在运行。浏览器打开 {local_url} 可继续查看状态。按 Ctrl+C 退出。")
             _wait_for_server_thread(thread)
             return
         except Exception as exc:
             print(f"桌面窗口启动失败，改用系统浏览器: {exc}")
+        finally:
+            set_desktop_window(None)
     elif webview_error:
         print(f"未启用内嵌桌面窗口，改用系统浏览器: {webview_error}")
 

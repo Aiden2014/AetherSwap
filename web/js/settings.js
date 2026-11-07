@@ -153,6 +153,8 @@ async function loadConfig() {
   if (invInput) invInput.value = inv.refresh_seconds ?? "";
   inventoryRefreshSeconds = parseInt(inv.refresh_seconds, 10) || inventoryRefreshSeconds || 600;
   const n = c.notify || {};
+  const gDesktopPayment = el("cfg-desktop-payment-enabled");
+  if (gDesktopPayment) gDesktopPayment.checked = n.desktop_payment_enabled !== false;
   const gPush = el("cfg-pushplus_token");
   if (gPush) gPush.value = n.pushplus_token ?? "";
   const gHoldingsReport = el("cfg-holdings_report_interval_hours");
@@ -298,6 +300,7 @@ function formToConfig() {
       refresh_seconds: el("cfg-inv-refresh") ? parseInt(el("cfg-inv-refresh").value, 10) || undefined : undefined,
     },
     notify: {
+      desktop_payment_enabled: el("cfg-desktop-payment-enabled") ? el("cfg-desktop-payment-enabled").checked : undefined,
       pushplus_token: el("cfg-pushplus_token") ? el("cfg-pushplus_token").value.trim() : undefined,
       holdings_report_interval_hours: el("cfg-holdings_report_interval_hours") ? parseInt(el("cfg-holdings_report_interval_hours").value, 10) : undefined,
       holdings_report_change_threshold_pct: el("cfg-holdings_report_change_threshold_pct") ? parseFloat(el("cfg-holdings_report_change_threshold_pct").value) : undefined,

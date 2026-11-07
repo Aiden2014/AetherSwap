@@ -43,6 +43,24 @@ async function tabSwitch(name) {
   return true;
 }
 
+window.openPaymentDashboard = async function () {
+  if (!(await tabSwitch("auto"))) return false;
+  await refreshStatus();
+  const payment = el("pending-payment");
+  if (payment && !payment.classList.contains("hidden")) {
+    payment.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  return true;
+};
+
+function handlePaymentNotificationLink() {
+  if (window.location.hash === "#payment") {
+    return window.openPaymentDashboard();
+  }
+}
+
+window.addEventListener("hashchange", handlePaymentNotificationLink);
+
 let lastStatus = "idle";
 let _lastLyricText = "";
 // 是否已配置账号的缓存标志（避免 popup 在未配置时误弹出）
@@ -897,6 +915,7 @@ function setupKeyboardShortcuts() {
   });
 }
 async function init() {
+  handlePaymentNotificationLink();
   Theme.apply(Theme.get());
   if (window.matchMedia) {
     const mm = window.matchMedia("(prefers-color-scheme: dark)");

@@ -66,6 +66,9 @@ def test_payment_selection_priority_save_and_reload(payment_browser, width):
         alipay = page.locator("#cfg-pay-alipay")
         wechat = page.locator("#cfg-pay-wechat")
         priority = page.locator("#cfg-pay-priority")
+        desktop_payment = page.locator("#cfg-desktop-payment-enabled")
+        assert desktop_payment.is_checked()
+        desktop_payment.uncheck()
         assert wechat.is_checked() and not alipay.is_checked()
         assert priority.is_disabled()
         alipay.check()
@@ -74,16 +77,21 @@ def test_payment_selection_priority_save_and_reload(payment_browser, width):
             priority.select_option(preferred)
             page.evaluate("saveConfigFromForm()")
             assert page.evaluate("storedConfig.buff.pay_methods") == expected
+            assert page.evaluate("storedConfig.notify.desktop_payment_enabled") is False
+            assert not desktop_payment.is_checked()
             assert alipay.is_checked() and wechat.is_checked()
             assert priority.input_value() == preferred
         alipay.uncheck()
         assert priority.is_disabled()
         page.evaluate("saveConfigFromForm()")
         assert page.evaluate("storedConfig.buff.pay_methods") == ["wechat"]
+        desktop_payment.check()
+        page.evaluate("saveConfigFromForm()")
+        assert page.evaluate("storedConfig.notify.desktop_payment_enabled") is True
         wechat.uncheck()
         error = page.evaluate("async () => { try { await saveConfigFromForm(); } catch (err) { return err.message; } }")
         assert "至少选择一种" in error
-        assert page.evaluate("savedConfigs.length") == 3
+        assert page.evaluate("savedConfigs.length") == 4
         assert not errors
     finally:
         page.close()

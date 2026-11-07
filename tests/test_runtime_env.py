@@ -1,4 +1,7 @@
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.runtime_env import (
     RuntimeProfile,
@@ -83,3 +86,32 @@ def test_relogin_start_requires_manual_cookie_without_gui(monkeypatch):
     assert result["ok"] is False
     assert result["code"] == "manual_cookie_required"
     assert result["manual_cookie_required"] is True
+
+
+def test_occupied_port_does_not_create_another_gui_or_backend(monkeypatch, capsys):
+    from app import main
+
+    monkeypatch.setattr(main, "check_runtime_dependencies", lambda: None)
+    monkeypatch.setattr(main, "_ensure_disclaimer", lambda: None)
+    monkeypatch.setattr(main, "get_runtime_profile", lambda: SimpleNamespace(
+        mode="desktop", reason="test", open_browser=True))
+    monkeypatch.setattr(main, "get_bind_host", lambda _profile: "127.0.0.1")
+    monkeypatch.setattr(main, "get_port", lambda: 28472)
+    monkeypatch.setattr(main, "_is_server_listening", lambda _host, _port: True)
+    monkeypatch.setattr(main, "_create_server", lambda *_args: pytest.fail("must not launch a second backend"))
+    monkeypatch.setattr(main, "_load_webview", lambda: pytest.fail("must not open GUI attached to another process"))
+    main.main()
+    assert "端口 28472 已被占用" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("started", [True, False])
+def test_gui_readiness_uses_its_own_server_not_an_existing_port(monkeypatch, started):
+    from app import main
+
+    alive = iter([True, False])
+    thread = SimpleNamespace(is_alive=lambda: next(alive))
+    server = SimpleNamespace(started=started)
+    monkeypatch.setattr(main.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(main.socket, "create_connection", lambda *_args, **_kwargs: pytest.fail(
+        "must not use another process's listener to decide GUI readiness"))
+    assert main._wait_for_server_ready(thread, "127.0.0.1", 28472, server=server) is started

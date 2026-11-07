@@ -73,6 +73,7 @@ DEFAULTS = {
         "refresh_seconds": 600,
     },
     "notify": {
+        "desktop_payment_enabled": True,
         "pushplus_token": "",
         "holdings_report_interval_hours": 0,
         "holdings_report_change_threshold_pct": 20,

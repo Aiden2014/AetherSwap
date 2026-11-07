@@ -24,6 +24,7 @@ from app.services.buff_checkout_guard import (
 )
 from app.services.buff_auth import get_buff_auth_lock
 from app.notify import send_pushplus, build_payment_notify_content, wait_email_command
+from app.desktop_notify import notify_payment_required
 from utils.delay import jittered_sleep
 from buff import (
     BuffAuthExpired,
@@ -1092,6 +1093,7 @@ def _do_payment_notify_and_wait(
     started = time.monotonic()
     finished = threading.Event()
     confirmation_lock = threading.Lock()
+    dismiss_notification = None
     set_pending_payment({
         "pay_url": pay_url,
         "pay_type": pay_type,
@@ -1103,6 +1105,14 @@ def _do_payment_notify_and_wait(
         if on_entering_payment:
             on_entering_payment()
         notify_cfg = config.get("notify") or {}
+        if notify_cfg.get("desktop_payment_enabled", True):
+            try:
+                dismiss_notification = notify_payment_required(
+                    name, unit_price, num, pay_type, log_fn=log_fn,
+                )
+            except Exception as exc:
+                if log_fn:
+                    log_fn(f"[Buff]   → 系统通知异常 ({type(exc).__name__})，继续等待付款", "warn")
         push_token = (notify_cfg.get("pushplus_token") or "").strip()
         if push_token:
             sell_ratio = None
@@ -1181,6 +1191,11 @@ def _do_payment_notify_and_wait(
         with confirmation_lock:
             finished.set()
         set_pending_payment(None)
+        if dismiss_notification is not None:
+            try:
+                dismiss_notification()
+            except Exception:
+                pass
 def _do_batch_wait_finalize_and_append(
     buff_client: Any,
     item: Dict[str, Any],
