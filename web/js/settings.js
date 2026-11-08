@@ -33,6 +33,11 @@ function syncPaymentPriority() {
   if (selected.length === 1) priority.value = selected[0];
 }
 
+function syncDesktopPaymentDuration() {
+  const duration = el("cfg-desktop-payment-duration");
+  if (duration) duration.disabled = !el("cfg-desktop-payment-enabled")?.checked;
+}
+
 function paymentMethodsFromForm() {
   if (!el("cfg-pay-alipay") || !el("cfg-pay-wechat")) return undefined;
   const selected = ["alipay", "wechat"].filter(method => el(`cfg-pay-${method}`).checked);
@@ -155,6 +160,9 @@ async function loadConfig() {
   const n = c.notify || {};
   const gDesktopPayment = el("cfg-desktop-payment-enabled");
   if (gDesktopPayment) gDesktopPayment.checked = n.desktop_payment_enabled !== false;
+  const gDesktopDuration = el("cfg-desktop-payment-duration");
+  if (gDesktopDuration) gDesktopDuration.value = n.desktop_payment_duration_seconds ?? 30;
+  syncDesktopPaymentDuration();
   const gPush = el("cfg-pushplus_token");
   if (gPush) gPush.value = n.pushplus_token ?? "";
   const gHoldingsReport = el("cfg-holdings_report_interval_hours");
@@ -301,6 +309,7 @@ function formToConfig() {
     },
     notify: {
       desktop_payment_enabled: el("cfg-desktop-payment-enabled") ? el("cfg-desktop-payment-enabled").checked : undefined,
+      desktop_payment_duration_seconds: readIntInput("cfg-desktop-payment-duration"),
       pushplus_token: el("cfg-pushplus_token") ? el("cfg-pushplus_token").value.trim() : undefined,
       holdings_report_interval_hours: el("cfg-holdings_report_interval_hours") ? parseInt(el("cfg-holdings_report_interval_hours").value, 10) : undefined,
       holdings_report_change_threshold_pct: el("cfg-holdings_report_change_threshold_pct") ? parseFloat(el("cfg-holdings_report_change_threshold_pct").value) : undefined,

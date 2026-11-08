@@ -1094,13 +1094,16 @@ def _do_payment_notify_and_wait(
     finished = threading.Event()
     confirmation_lock = threading.Lock()
     dismiss_notification = None
-    set_pending_payment({
+    pending_payment = {
         "pay_url": pay_url,
         "pay_type": pay_type,
         "name": name,
         "order_id": order_id,
         "auto_check_until": time.time() + PAYMENT_POLL_TIMEOUT_SECONDS if payment_checker else None,
-    })
+    }
+    set_pending_payment(pending_payment)
+    from app.payment_qr import prepare_payment_qr, forget_payment_qr
+    qr_record = prepare_payment_qr(pending_payment)
     try:
         if on_entering_payment:
             on_entering_payment()
@@ -1108,7 +1111,9 @@ def _do_payment_notify_and_wait(
         if notify_cfg.get("desktop_payment_enabled", True):
             try:
                 dismiss_notification = notify_payment_required(
-                    name, unit_price, num, pay_type, log_fn=log_fn,
+                    name, unit_price, num, pay_type, log_fn=log_fn, pay_url=pay_url,
+                    duration_seconds=notify_cfg.get("desktop_payment_duration_seconds", 30),
+                    qr_record=qr_record,
                 )
             except Exception as exc:
                 if log_fn:
@@ -1191,6 +1196,7 @@ def _do_payment_notify_and_wait(
         with confirmation_lock:
             finished.set()
         set_pending_payment(None)
+        forget_payment_qr(pending_payment)
         if dismiss_notification is not None:
             try:
                 dismiss_notification()

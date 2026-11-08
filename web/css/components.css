@@ -746,6 +746,8 @@ body {
   border-radius: var(--radius-lg);
   padding: 24px;
   display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
   justify-content: space-between;
   align-items: center;
   margin-top: 24px;
@@ -756,6 +758,8 @@ body {
   display: flex;
   gap: 16px;
   align-items: flex-start;
+  min-width: 0;
+  flex: 1 1 280px;
 }
 
 .payment-icon {
@@ -770,6 +774,11 @@ body {
   color: var(--text-main);
 }
 
+.payment-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .payment-text p {
   margin: 0;
   font-size: 14px;
@@ -778,8 +787,62 @@ body {
 
 .payment-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+}
+
+.payment-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+}
+
+.payment-details:not(:has(> :not(.hidden))) {
+  display: none;
+}
+
+#pay-qrcode-status:empty {
+  display: none;
+}
+
+#pay-qrcode-status {
+  width: 100%;
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0;
+}
+
+.payment-qr {
+  flex: 0 1 352px;
+  min-width: 0;
+}
+
+.payment-qr p {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+#pay-qrcode {
+  box-sizing: border-box;
+  width: 352px;
+  max-width: 100%;
+  padding: 16px;
+  background: #fff;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+
+#pay-qrcode img {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
 }
 
 .link-btn {

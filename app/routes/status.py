@@ -1,6 +1,7 @@
 """Status, log, plan, and payment-related routes."""
 from pathlib import Path
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Response
+from app.payment_qr import prepare_payment_qr, payment_token
 from app.config_loader import load_app_config_validated
 from app.state import (
     clear_log,
@@ -63,7 +64,23 @@ def api_plan():
     return {"plan": get_plan()}
 @router.get("/api/pending_payment")
 def api_pending_payment():
-    return {"pending": get_pending_payment()}
+    payment = get_pending_payment()
+    if not payment or not payment.get("pay_url"):
+        return {"pending": payment}
+    qr = prepare_payment_qr(payment)
+    return {"pending": dict(payment, qr_status=qr.status,
+                            qr_image_url=f"/api/payment_qrcode/{qr.token}" if qr.image else None)}
+
+
+@router.get("/api/payment_qrcode/{token}")
+def api_payment_qrcode(token: str):
+    payment = get_pending_payment()
+    if not payment or payment_token(payment) != token:
+        raise HTTPException(status_code=404, detail="当前付款二维码已结束或订单已切换")
+    qr = prepare_payment_qr(payment)
+    if not qr.image:
+        raise HTTPException(status_code=404, detail="付款二维码尚未就绪")
+    return Response(qr.image, media_type="image/png", headers={"Cache-Control": "no-store"})
 @router.post("/api/confirm_payment")
 def api_confirm_payment(body: ConfirmBody):
     confirm_payment(body.ok)

@@ -122,6 +122,52 @@ function pushLyricLine(text, subText) {
     if (vp) vp.style.height = subText ? "72px" : "48px";
   }
 }
+function renderPaymentDetails(payment) {
+  const qrWrap = el("pay-qrcode-wrap");
+  const qrBox = el("pay-qrcode");
+  const status = el("pay-qrcode-status");
+  const url = payment?.qr_image_url || "";
+  const isAlipay = payment?.pay_type === "alipay";
+  const supported = isAlipay || payment?.pay_type === "wechat";
+  // Order identity matters even if BUFF happens to reuse a payment URL.
+  const key = JSON.stringify([payment?.order_id, payment?.pay_type, url]);
+  if (status) {
+    status.textContent = !payment?.pay_url ? "" : payment.qr_status === "ready" ? ""
+      : payment.qr_status === "unavailable" ? "未能读取付款二维码，请打开支付链接完成付款。"
+      : isAlipay ? "正在读取支付宝收银台中的付款二维码…" : "正在生成微信付款二维码…";
+  }
+  if (url.startsWith("/api/payment_qrcode/") && supported && qrWrap && qrBox) {
+    if (qrBox.dataset.paymentKey !== key) {
+      qrBox.replaceChildren();
+      delete qrBox.dataset.paymentKey;
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.title = "点击查看原尺寸二维码";
+      const image = document.createElement("img");
+      image.alt = isAlipay ? "支付宝收银台付款二维码" : "微信付款二维码";
+      image.addEventListener("error", () => {
+        if (status) status.textContent = "二维码加载失败，请打开支付链接完成付款。";
+      });
+      image.src = url;
+      link.appendChild(image);
+      qrBox.appendChild(link);
+      qrBox.dataset.paymentKey = key;
+      qrWrap.classList.remove("hidden");
+    }
+    const label = el("pay-qrcode-label");
+    if (label) label.textContent = isAlipay ? "支付宝付款码" : "微信付款码";
+    const hint = el("pay-qrcode-hint");
+    if (hint) hint.textContent = (isAlipay ? "请使用支付宝扫一扫付款。" : "请使用微信扫一扫付款。") + "点击二维码可查看原尺寸。";
+  } else {
+    qrWrap?.classList.add("hidden");
+    qrBox?.replaceChildren();
+    if (qrBox) delete qrBox.dataset.paymentKey;
+  }
+
+}
+
 async function refreshStatus() {
   try {
     const d = await fetchJson(API + "/status");
@@ -173,7 +219,7 @@ async function refreshStatus() {
       const link = el("pay-link");
       if (link) {
         link.href = p.pay_url;
-        link.textContent = p.pay_type === "wechat" ? "微信支付链接（可复制到浏览器）" : "打开支付链接";
+        link.textContent = p.pay_type === "wechat" ? "微信支付链接（可复制到浏览器）" : "新窗口打开支付宝收银台";
       }
       const t = el("pay-type");
       if (t) t.textContent = p.name ? "订单: " + p.name : "";
@@ -185,27 +231,12 @@ async function refreshStatus() {
           : "支付后请确认已完成支付";
       }
       box.dataset.payUrl = p.pay_url;
-      const qrWrap = el("pay-qrcode-wrap");
-      const qrBox = el("pay-qrcode");
-      if (p.pay_type === "wechat" && qrWrap && qrBox && typeof QRCode !== "undefined") {
-        qrWrap.classList.remove("hidden");
-        qrBox.innerHTML = "";
-        try {
-          new QRCode(qrBox, { text: p.pay_url, width: 200, height: 200 });
-        } catch (e) {
-          qrWrap.classList.add("hidden");
-        }
-      } else {
-        if (qrWrap) qrWrap.classList.add("hidden");
-        if (qrBox) qrBox.innerHTML = "";
-      }
+      renderPaymentDetails(p);
     } else {
       box.classList.add("hidden");
       box.dataset.payUrl = "";
-      const qrWrap = el("pay-qrcode-wrap");
-      const qrBox = el("pay-qrcode");
-      if (qrWrap) qrWrap.classList.add("hidden");
-      if (qrBox) qrBox.innerHTML = "";
+      renderPaymentDetails(null);
+      el("pay-link")?.removeAttribute("href");
     }
   } catch {
   }

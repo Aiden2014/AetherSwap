@@ -74,6 +74,7 @@ DEFAULTS = {
     },
     "notify": {
         "desktop_payment_enabled": True,
+        "desktop_payment_duration_seconds": 30,
         "pushplus_token": "",
         "holdings_report_interval_hours": 0,
         "holdings_report_change_threshold_pct": 20,
@@ -166,6 +167,15 @@ def payment_methods(buff: dict) -> list[str]:
     return ordered
 
 
+def notification_duration_seconds(value: Any) -> int:
+    try:
+        if isinstance(value, bool):
+            return 30
+        return max(5, min(300, int(value)))
+    except (ValueError, TypeError, OverflowError):
+        return 30
+
+
 def _validate_ranges(cfg: dict) -> dict:
     # 简单校验一下，防止用户乱填配置搞崩程序
     import warnings
@@ -177,6 +187,9 @@ def _validate_ranges(cfg: dict) -> dict:
     buff["pay_methods"] = payment_methods(buff)
     buff["pay_method"] = buff["pay_methods"][0]
     cfg["buff"] = buff
+    notify = cfg.setdefault("notify", {})
+    notify["desktop_payment_duration_seconds"] = notification_duration_seconds(
+        notify.get("desktop_payment_duration_seconds", 30))
 
     if isinstance(pipe.get("max_discount"), (int, float)):
         v = pipe["max_discount"]

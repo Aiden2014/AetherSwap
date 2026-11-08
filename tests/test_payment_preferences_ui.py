@@ -67,6 +67,9 @@ def test_payment_selection_priority_save_and_reload(payment_browser, width):
         wechat = page.locator("#cfg-pay-wechat")
         priority = page.locator("#cfg-pay-priority")
         desktop_payment = page.locator("#cfg-desktop-payment-enabled")
+        duration = page.locator("#cfg-desktop-payment-duration")
+        assert duration.input_value() == "30"
+        duration.fill("45")
         assert desktop_payment.is_checked()
         desktop_payment.uncheck()
         assert wechat.is_checked() and not alipay.is_checked()
@@ -78,6 +81,8 @@ def test_payment_selection_priority_save_and_reload(payment_browser, width):
             page.evaluate("saveConfigFromForm()")
             assert page.evaluate("storedConfig.buff.pay_methods") == expected
             assert page.evaluate("storedConfig.notify.desktop_payment_enabled") is False
+            assert page.evaluate("storedConfig.notify.desktop_payment_duration_seconds") == 45
+            assert duration.input_value() == "45"
             assert not desktop_payment.is_checked()
             assert alipay.is_checked() and wechat.is_checked()
             assert priority.input_value() == preferred

@@ -8,7 +8,7 @@
   <link rel="stylesheet" href="/css/variables.css" />
   <link rel="stylesheet" href="/css/base.css" />
   <link rel="stylesheet" href="/css/layout.css?v=2" />
-  <link rel="stylesheet" href="/css/components.css?v=8" />
+  <link rel="stylesheet" href="/css/components.css?v=11" />
   <link rel="stylesheet" href="/css/animations.css" />
   <style>
     /* Nav badge */
@@ -481,17 +481,22 @@
               <h3>等待支付</h3>
               <p id="pay-type">订单待处理</p>
               <p id="pay-auto-status"></p>
-              <div id="pay-qrcode-wrap" class="hidden" style="margin-top:10px;">
-                <div id="pay-qrcode"></div>
-              </div>
             </div>
           </div>
           <div class="payment-actions">
-            <a id="pay-link" href="#" target="_blank" class="link-btn">打开链接</a>
+            <a id="pay-link" href="#" target="_blank" rel="noopener noreferrer" class="link-btn">打开链接</a>
             <button id="btn-copy-pay" class="link-btn">复制</button>
             <div class="divider-v"></div>
             <button id="btn-fail" class="btn btn-sm btn-ghost">放弃</button>
             <button id="btn-paid" class="btn btn-sm btn-primary">已完成支付</button>
+          </div>
+          <div class="payment-details">
+            <p id="pay-qrcode-status" role="status"></p>
+            <div id="pay-qrcode-wrap" class="payment-qr hidden">
+              <p id="pay-qrcode-label"></p>
+              <div id="pay-qrcode"></div>
+              <p id="pay-qrcode-hint"></p>
+            </div>
           </div>
         </div>
       </section>
@@ -906,10 +911,16 @@
             <div class="form-grid">
               <div class="field field--switch">
                 <label class="checkbox-wrapper">
-                  <input type="checkbox" id="cfg-desktop-payment-enabled" checked />
+                  <input type="checkbox" id="cfg-desktop-payment-enabled" onchange="syncDesktopPaymentDuration()" checked />
                   <span>待付款时发送系统通知</span>
                 </label>
-                <span class="field-hint">Windows 10/11 本地桌面模式下生效，窗口最小化时也可提醒；点击通知返回控制台。请在 Windows 设置中允许 AetherSwap 通知。</span>
+                <span class="field-hint">Windows 10/11 本地桌面模式下生效，窗口最小化时也可提醒；点击通知返回控制台。请在 Windows 设置中允许 AetherSwap 通知。勿扰模式和系统通知设置可能会影响弹窗。</span>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label for="cfg-desktop-payment-duration">支付通知显示时长（5-300秒，默认30秒）</label>
+                  <input type="number" id="cfg-desktop-payment-duration" min="5" max="300" step="1" value="30" />
+                </div>
               </div>
               <div class="field-row">
                 <div class="field">
@@ -1829,17 +1840,16 @@
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="/js/utils.js?v=3"></script>
   <script src="/js/theme.js"></script>
   <script src="/js/accounts.js"></script>
   <script src="/js/console.js"></script>
   <script src="/js/steamGuard.js"></script>
   <script src="/js/transactions.js"></script>
-  <script src="/js/settings.js?v=3"></script>
+  <script src="/js/settings.js?v=5"></script>
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
-  <script src="/js/main.js?v=6"></script>
+  <script src="/js/main.js?v=9"></script>
   <script src="/js/inventoryHoldings.js?v=6"></script>
   <script src="/js/gift.js"></script>
   <script src="/js/steamDeals.js"></script>
