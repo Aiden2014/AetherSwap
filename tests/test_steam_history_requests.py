@@ -53,6 +53,18 @@ def test_history_transport_errors_do_not_leak_credentials(monkeypatch):
     assert "secret-password" not in str(caught.value)
 
 
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_history_rejected_login_suggests_refresh_without_claiming_rate_limit(monkeypatch, status):
+    monkeypatch.setattr(client, "get_market", lambda *_args, **_kwargs: response(status, []))
+    with pytest.raises(client.SteamHistoryError) as caught:
+        client.fetch_history("Test Item", raise_on_error=True)
+
+    assert caught.value.status_code == status
+    assert caught.value.retryable is False
+    assert "刷新 Steam 登录" in str(caught.value)
+    assert "429" not in str(caught.value)
+
+
 @pytest.mark.parametrize("return_currency", [False, True])
 def test_history_success_contract_is_unchanged(monkeypatch, return_currency):
     prices = [["Aug 01 2026 01: +0", 10.5, "2"]]
@@ -67,3 +79,33 @@ def test_history_success_contract_is_unchanged(monkeypatch, return_currency):
     result = client.fetch_history("Test Item", return_currency=return_currency)
     assert result == ({"history": prices, "currency": "USD"} if return_currency else prices)
     assert sent[0]["headers"]["Accept-Language"] == "zh-CN,zh;q=0.9"
+
+
+def test_history_sends_current_browser_headers_and_login_through_market_transport(monkeypatch):
+    from types import SimpleNamespace
+    from steam import session as steam_session
+
+    sent = []
+    prices = [["Aug 01 2026 01: +0", 10.5, "2"]]
+
+    def curl_get(url, **kwargs):
+        sent.append((url, kwargs))
+        return SimpleNamespace(
+            status_code=200, url=url, headers={"Content-Type": "application/json"},
+            encoding="utf-8", content=json.dumps({"success": True, "prices": prices}).encode(),
+        )
+
+    monkeypatch.setattr(steam_session, "curl_requests", SimpleNamespace(get=curl_get))
+    proxies = {"https": "http://proxy.example:8080/"}
+    assert client.fetch_history(
+        "Tec-9 | Red Quartz (Factory New)", cookies="sessionid=test; steamLoginSecure=test-login",
+        proxies=proxies, raise_on_error=True,
+    ) == prices
+    assert len(sent) == 1
+    url, request = sent[0]
+    assert "/market/pricehistory/?appid=730&market_hash_name=Tec-9%20%7C%20Red%20Quartz%20%28Factory%20New%29" in url
+    assert "Chrome/156." in request["headers"]["User-Agent"]
+    assert request["headers"]["Accept-Language"] == "zh-CN,zh;q=0.9"
+    assert "steamLoginSecure=test-login" in request["headers"]["Cookie"]
+    assert request["proxies"]["https"] == proxies["https"]
+    assert request["impersonate"] == "chrome120"

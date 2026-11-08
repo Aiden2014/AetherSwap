@@ -9,6 +9,7 @@ from steam.client import (
     market_hash_name_from_listing_url as _market_hash_name_from_listing_url,
 )
 from steam.request_policy import steam_market_cooldown
+from steam.session import steam_login_cookie_expired
 steam_timeout = 15
 steam_retry_attempts = 2
 _history_cache: Dict[tuple, tuple] = {}
@@ -17,6 +18,7 @@ _history_cache_max = 200
 _history_failure_ttl = 30
 _history_lock = threading.Lock()
 _history_cooldown = steam_market_cooldown
+_history_auth_failure = None
 
 
 def steam_market_cooldown_remaining() -> float:
@@ -40,14 +42,41 @@ class SteamClient:
         app_id: int = 730,
         return_currency: bool = False,
     ) -> Union[Optional[List], Optional[Dict]]:
-        cred = get_steam_credentials()
-        cookies = (cred.get("cookies") or "").strip() or None
-        identity = f"{cred.get('steam_id') or ''}\0{cookies or ''}"
-        account_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-        key = (account_key, market_hash_name, app_id, return_currency)
+        global _history_auth_failure
         # Serialize cache misses so concurrent buy/sell tasks cannot duplicate a
         # failed request or race past a newly established endpoint cooldown.
         with _history_lock:
+            cred = get_steam_credentials()
+            cookies = (cred.get("cookies") or "").strip() or None
+            if steam_login_cookie_expired(cookies):
+                from app.state import log
+                from app.services.steam_auth import try_steam_auto_relogin
+
+                # Automatic reads respect backoff; manual verification can
+                # still repair the login while market endpoints are cooling.
+                if _history_cooldown.remaining() > 0:
+                    return None
+                fingerprint = hashlib.sha256((cookies or "").encode("utf-8")).hexdigest()
+                if (_history_auth_failure is not None
+                        and _history_auth_failure[0] == fingerprint
+                        and time.monotonic() - _history_auth_failure[1] < _history_failure_ttl):
+                    return None
+                log("[SteamClient] Steam 登录 Cookie 已过期，尝试自动刷新登录", "info", category="steam")
+                expected_steam_id = cred.get("steam_id")
+                ok, _, message = try_steam_auto_relogin()
+                cred = get_steam_credentials()
+                if cred.get("steam_id") != expected_steam_id:
+                    log("[SteamClient] 当前 Steam 账号已切换，本次历史请求已取消", "warn", category="steam")
+                    return None
+                cookies = (cred.get("cookies") or "").strip() or None
+                if not ok or not cookies or steam_login_cookie_expired(cookies):
+                    _history_auth_failure = (fingerprint, time.monotonic())
+                    log(f"[SteamClient] 自动刷新登录未完成：{message}；请在设置中验证 Steam 登录", "warn", category="steam")
+                    return None
+                _history_auth_failure = None
+            identity = f"{cred.get('steam_id') or ''}\0{cookies or ''}"
+            account_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            key = (account_key, market_hash_name, app_id, return_currency)
             now = time.monotonic()
             if key in _history_cache:
                 data, stored_at = _history_cache[key]

@@ -17,18 +17,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 CURRENCY_CNY = "CNY"
 CURRENCY_USD = "USD"
 DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://steamcommunity.com/market/",
 }
-# Controlled listing requests returned 429 with Chrome/120 and 200 with
-# Chrome/156, including when only User-Agent changed. Extra language,
-# navigation, and client-hint overrides were not needed.
-_LISTING_HEADERS = {
-    **DEFAULT_HEADERS,
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36",
-}
+# Both listing and history reads need the current browser User-Agent. Using
+# Chrome/120 for history returned 429 even when only changing it to Chrome/156
+# reached the endpoint. Keep their defaults together to avoid partial fixes.
 _LISTING_URL_RE = re.compile(
     r"https?://steamcommunity\.com/market/listings/[^\s\])]+",
     re.I,
@@ -324,7 +320,7 @@ def resolve_market_hash_name_from_listing_url(
         request_url = _coerce_listing_url(url)
         client = session or create_steam_session()
         headers = {
-            **_LISTING_HEADERS,
+            **DEFAULT_HEADERS,
             "Referer": request_url,
         }
         kwargs = {
@@ -418,6 +414,8 @@ class SteamHistoryError(Exception):
                 self.retry_after_header = response.headers.get("Retry-After")
                 self.retry_after = parse_retry_after(self.retry_after_header)
                 details.append(f"retry_after={self.retry_after:g}s" if self.retry_after_header else "retry_after=unspecified")
+            elif self.status_code in (400, 401, 403):
+                details.append("Steam 登录态可能失效，请在设置中刷新 Steam 登录后重试")
         super().__init__("; ".join(details))
 
 

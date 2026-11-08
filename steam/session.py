@@ -1,5 +1,9 @@
+import base64
+import json
+import math
+import time
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 import requests
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -74,8 +78,18 @@ class _MarketReadAdapter(requests.adapters.HTTPAdapter):
 class _SteamSession(requests.Session):
     """Apply the app's proxy policy to callers without their own routing loop."""
 
+    def __init__(self, *, allow_auth_during_cooldown=False):
+        super().__init__()
+        self._allow_auth_during_cooldown = allow_auth_during_cooldown
+
     def request(self, method, url, **kwargs):
-        if urlparse(url).hostname == "steamcommunity.com":
+        parsed = urlparse(url)
+        is_auth_check = (
+            self._allow_auth_during_cooldown
+            and method.upper() == "GET"
+            and parsed.path.rstrip("/") == "/my/profile"
+        )
+        if parsed.hostname == "steamcommunity.com" and not is_auth_check:
             from steam.request_policy import check_steam_market_cooldown
 
             check_steam_market_cooldown()
@@ -105,8 +119,8 @@ class _SteamSession(requests.Session):
             return super().request(method, url, **kwargs)
 
 
-def create_steam_session(*, verify: bool = False) -> requests.Session:
-    session = _SteamSession()
+def create_steam_session(*, verify: bool = False, allow_auth_during_cooldown: bool = False) -> requests.Session:
+    session = _SteamSession(allow_auth_during_cooldown=allow_auth_during_cooldown)
     session.verify = verify
     session.mount("https://steamcommunity.com/market", _MarketReadAdapter())
     session.mount("https://steamcommunity.com/inventory/", _MarketReadAdapter())
@@ -131,6 +145,26 @@ def parse_cookies(cookie_str: str) -> dict:
             k, _, v = s.partition("=")
             out[k.strip()] = v.strip()
     return out
+def steam_login_cookie_expired(cookie_str: str) -> bool:
+    """Reject locally expired JWTs; unverified claims never establish validity."""
+    secure = parse_cookies(cookie_str or "").get("steamLoginSecure", "")
+    token = unquote(secure).partition("||")[2]
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        payload = base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4))
+        claims = json.loads(payload)
+        expiry = claims.get("exp") if isinstance(claims, dict) else None
+        return (
+            type(expiry) in (int, float)
+            and math.isfinite(expiry)
+            and expiry <= time.time()
+        )
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 def create_market_session(
     cookies_raw: str,
     steam_id: str,

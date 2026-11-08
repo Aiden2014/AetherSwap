@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 import time
@@ -34,6 +35,7 @@ def environment(monkeypatch):
     logs = Mock()
     sleep = Mock()
     monkeypatch.setattr(service, "_history_cache", {})
+    monkeypatch.setattr(service, "_history_auth_failure", None)
     monkeypatch.setattr(service, "_history_cooldown", MarketCooldown(lambda: now[0]), raising=False)
     monkeypatch.setattr(service.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(service, "get_steam_credentials", lambda: credentials.copy())
@@ -42,6 +44,84 @@ def environment(monkeypatch):
     monkeypatch.setattr(state, "log", logs)
     monkeypatch.setattr(delay, "jittered_sleep", sleep)
     return SimpleNamespace(now=now, credentials=credentials, proxy=proxy, logs=logs, sleep=sleep)
+
+
+def expired_cookie():
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": 1}).encode()).decode().rstrip("=")
+    return f"steamLoginSecure=76561198000000000%7C%7Cheader.{payload}.signature"
+
+
+def test_expired_history_login_refreshes_before_request_and_uses_new_cache_key(monkeypatch, environment):
+    from app.services import steam_auth
+
+    environment.credentials["cookies"] = expired_cookie()
+
+    def refresh():
+        environment.credentials["cookies"] = "sessionid=refreshed; steamLoginSecure=fresh"
+        return True, "auto_ok", "ready"
+
+    login = Mock(side_effect=refresh)
+    monkeypatch.setattr(steam_auth, "try_steam_auto_relogin", login)
+    get = Mock(return_value=response(body={"success": True, "prices": []}))
+    monkeypatch.setattr(client, "get_market", get)
+
+    assert service.SteamClient().fetch_history("Item A") == []
+    assert service.SteamClient().fetch_history("Item A") == []
+    login.assert_called_once()
+    get.assert_called_once()
+    assert get.call_args.kwargs["cookies"]["sessionid"] == "refreshed"
+
+
+def test_failed_history_refresh_is_bounded_across_candidates(monkeypatch, environment):
+    from app.services import steam_auth
+
+    environment.credentials["cookies"] = expired_cookie()
+    login = Mock(return_value=(False, "network_error", "network unavailable"))
+    monkeypatch.setattr(steam_auth, "try_steam_auto_relogin", login)
+    get = Mock()
+    monkeypatch.setattr(client, "get_market", get)
+
+    assert service.SteamClient().fetch_history("Item A") is None
+    assert service.SteamClient().fetch_history("Item B") is None
+    login.assert_called_once()
+    get.assert_not_called()
+    environment.now[0] += 31
+    assert service.SteamClient().fetch_history("Item C") is None
+    assert login.call_count == 2
+    assert environment.logs.call_args_list
+
+
+def test_account_switch_during_history_refresh_does_not_send_with_other_credentials(monkeypatch, environment):
+    from app.services import steam_auth
+
+    environment.credentials["cookies"] = expired_cookie()
+
+    def refresh():
+        environment.credentials.update(steam_id="account-b", cookies="steamLoginSecure=other-account")
+        return True, "auto_ok", "ready"
+
+    monkeypatch.setattr(steam_auth, "try_steam_auto_relogin", refresh)
+    get = Mock()
+    monkeypatch.setattr(client, "get_market", get)
+    assert service.SteamClient().fetch_history("Item A") is None
+    get.assert_not_called()
+
+
+def test_expired_history_does_not_refresh_automatically_during_cooldown(monkeypatch, environment):
+    from app.services import steam_auth
+
+    environment.credentials["cookies"] = expired_cookie()
+    environment.cooldown = service._history_cooldown
+    environment.cooldown.defer(120)
+    login = Mock()
+    monkeypatch.setattr(steam_auth, "try_steam_auto_relogin", login)
+    get = Mock()
+    monkeypatch.setattr(client, "get_market", get)
+
+    assert service.SteamClient().fetch_history("Item A") is None
+    login.assert_not_called()
+    get.assert_not_called()
+    assert environment.cooldown.remaining() == 120
 
 
 def test_history_429_stops_retries_and_cools_down_other_candidates(monkeypatch, environment):
