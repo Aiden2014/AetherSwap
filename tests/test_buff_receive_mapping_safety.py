@@ -101,7 +101,7 @@ def test_later_purchase_delivered_first_updates_its_exact_bill(monkeypatch):
     task = {"tradeofferid":"new-offer", "items":[{
         "assetid":"seller-new","goods_id":42,"market_hash_name":ITEM_NAME,
     }]}
-    monkeypatch.setattr(receive_flow,"fetch_buff_steam_trade",lambda _client:(True,[task],""))
+    monkeypatch.setattr(receive_flow,"fetch_buff_steam_trade",lambda _client, **_kwargs:(True,[task],""))
     accepted=[]
     monkeypatch.setattr(receive_flow,"accept_steam_trade_offer",lambda offer,_cookies:accepted.append(offer) or True)
     monkeypatch.setattr(receive_flow,"jittered_sleep",lambda *_a:None)
@@ -204,7 +204,7 @@ def test_partial_inventory_visibility_never_persists_seller_assetid(
     monkeypatch.setattr(
         receive_flow,
         "fetch_buff_steam_trade",
-        lambda _client: (True, [task], ""),
+        lambda _client, **_kwargs: (True, [task], ""),
     )
     monkeypatch.setattr(receive_flow, "accept_steam_trade_offer", accept_offer)
     monkeypatch.setattr(
@@ -305,7 +305,7 @@ def test_inventory_poll_waits_for_all_new_assets_and_excludes_old_same_name(
     monkeypatch.setattr(
         receive_flow,
         "fetch_buff_steam_trade",
-        lambda _client: (True, [task], ""),
+        lambda _client, **_kwargs: (True, [task], ""),
     )
     monkeypatch.setattr(receive_flow, "accept_steam_trade_offer", accept_offer)
     monkeypatch.setattr(
@@ -361,7 +361,7 @@ def test_failed_pre_accept_inventory_snapshot_leaves_offer_unaccepted(
     monkeypatch.setattr(
         receive_flow,
         "fetch_buff_steam_trade",
-        lambda _client: (True, [task], ""),
+        lambda _client, **_kwargs: (True, [task], ""),
     )
     monkeypatch.setattr(
         receive_flow,
@@ -413,7 +413,7 @@ def test_unmatched_offer_is_never_accepted_or_scanned(monkeypatch):
     monkeypatch.setattr(
         receive_flow,
         "fetch_buff_steam_trade",
-        lambda _client: (True, [task], ""),
+        lambda _client, **_kwargs: (True, [task], ""),
     )
     monkeypatch.setattr(
         receive_flow,
@@ -489,7 +489,7 @@ def test_unknown_accept_result_is_reconciled_from_inventory(monkeypatch):
     monkeypatch.setattr(
         receive_flow,
         "fetch_buff_steam_trade",
-        lambda _client: (True, [task], ""),
+        lambda _client, **_kwargs: (True, [task], ""),
     )
     monkeypatch.setattr(
         receive_flow,

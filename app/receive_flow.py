@@ -22,12 +22,16 @@ def _cookies_str_to_dict(cookie_str: str) -> Dict[str, str]:
             k, _, v = s.partition("=")
             out[k.strip()] = v.strip()
     return out
-def fetch_buff_steam_trade(buff_client: Any) -> Tuple[bool, List[Dict[str, Any]], str]:
+def fetch_buff_steam_trade(
+    buff_client: Any, *, pipeline_checkpoint: bool = False,
+) -> Tuple[bool, List[Dict[str, Any]], str]:
     """Fetch pending BUFF trades through the shared authenticated client.
 
     BUFF must not use the Steam proxy pool or a second hard-coded browser
     identity.  The supplied client owns the stable Session, UA, account lock,
     request pacing and circuit breaker used by the purchase pipeline.
+    Only the pipeline's synchronous retry checkpoint may opt into polling
+    while running; background callers remain excluded.
     """
 
     try:
@@ -49,7 +53,9 @@ def fetch_buff_steam_trade(buff_client: Any) -> Tuple[bool, List[Dict[str, Any]]
                 if (
                     is_shutdown_pending()
                     or get_unresolved_checkout() is not None
-                    or status.get("status") == "running"
+                    or (status.get("status") == "running" and (
+                        not pipeline_checkpoint or status.get("step") != "WAITING_RETRY"
+                    ))
                     or status.get("buff_auth_expired")
                     or status.get("buff_verification_required")
                 ):
@@ -259,6 +265,9 @@ def try_receive_once(
     get_steam_credentials: Callable[[], dict],
     scan_inventory: Optional[Callable[[], Tuple[bool, List[dict], str]]] = None,
     update_purchase_by_id: Optional[Callable[[int, dict], bool]] = None,
+    *,
+    pipeline_checkpoint: bool = False,
+    is_stop_requested: Optional[Callable[[], bool]] = None,
 ) -> int:
     """Accept pending Buff→Steam trade offers and update purchase records.
     Uses ``update_purchase_by_id`` (O(1), keyed on SQLite primary key) when
@@ -266,7 +275,12 @@ def try_receive_once(
     between the time they are read and when the update is applied.
     Falls back to positional ``update_purchase`` only if``update_purchase_by_id``
     is not supplied (backward-compatibility).
+    Pipeline checkpoints hold the auth/activity locks for this entire call.
+    A stop prevents new accept requests; an already sent acceptance still
+    finishes inventory reconciliation.
     """
+    if is_stop_requested and is_stop_requested():
+        return 0
     purchases = get_purchases()
     pending_records: List[dict] = [
         p for p in purchases
@@ -283,7 +297,9 @@ def try_receive_once(
         steam_cookies["sessionid"] = session_id
     if not steam_cookies.get("sessionid") or not steam_cookies.get("steamLoginSecure"):
         return 0
-    ok, pending_tasks, err = fetch_buff_steam_trade(buff_client)
+    ok, pending_tasks, err = fetch_buff_steam_trade(
+        buff_client, pipeline_checkpoint=pipeline_checkpoint,
+    )
     if not ok or not pending_tasks:
         return 0
     bill_ids = list(dict.fromkeys(
@@ -311,6 +327,8 @@ def try_receive_once(
             return update_purchase_by_id(db_id, data)
         return update_purchase(positional_idx, data)
     for task in pending_tasks:
+        if is_stop_requested and is_stop_requested():
+            break
         offer_id = task.get("tradeofferid")
         if not offer_id:
             continue
@@ -371,6 +389,8 @@ def try_receive_once(
             if inv_item.get("assetid")
         }
 
+        if is_stop_requested and is_stop_requested():
+            break
         accept_result = accept_steam_trade_offer(str(offer_id), steam_cookies)
         if accept_result is False:
             continue

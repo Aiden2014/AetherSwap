@@ -289,6 +289,59 @@ def _process_deals_for_target(
     return acc, bought, False
 
 
+def _receive_pending_at_retry(ctx: PipelineContext, buyer) -> None:
+    """Run one receive pass synchronously before the next buying round."""
+    from app.config_loader import get_steam_credentials
+    from app.inventory_cs2 import scan_cs2_inventory
+    from app.receive_flow import try_receive_once
+    from app.services.buff_auth import get_buff_auth_lock
+    from steam.request_policy import steam_market_cooldown
+
+    try:
+        with get_buff_auth_lock():
+            with buff_activity_guard():
+                status = ctx.state.get_status()
+                if (
+                    ctx.is_stop_requested()
+                    or is_shutdown_pending()
+                    or get_unresolved_checkout() is not None
+                    or status.get("status") != "running"
+                    or status.get("step") != "WAITING_RETRY"
+                    or status.get("buff_auth_expired")
+                    or status.get("buff_verification_required")
+                    or steam_market_cooldown.remaining() > 0
+                ):
+                    return
+                if not any(
+                    p.get("pending_receipt") and not p.get("assetid") and p.get("_db_id")
+                    for p in ctx.state.get_purchases()
+                ):
+                    return
+                ctx.log("轮次等待期间检查 BUFF 待收货报价", category="receive")
+                received = try_receive_once(
+                    ctx.state.get_purchases,
+                    ctx.state.update_purchase,
+                    lambda: buyer,
+                    get_steam_credentials,
+                    scan_inventory=scan_cs2_inventory,
+                    update_purchase_by_id=ctx.state.update_purchase_by_id,
+                    pipeline_checkpoint=True,
+                    is_stop_requested=ctx.is_stop_requested,
+                )
+                ctx.log(f"轮次收货检查完成，本次收取 {received} 件物品", category="receive")
+    except (BuffAuthExpired, BuffRequestBlocked):
+        raise
+    except Exception as exc:
+        ctx.log(f"轮次收货检查暂时失败 ({type(exc).__name__})，稍后重试", "warn", category="receive")
+
+
+def _wait_between_rounds(ctx: PipelineContext, buyer, seconds: int) -> bool:
+    if not ctx.is_stop_requested():
+        ctx.set_status("running", "WAITING_RETRY", progress_item=f"Retry in {seconds}s")
+        _receive_pending_at_retry(ctx, buyer)
+    return ctx.wait_retry(seconds)
+
+
 def _run_pipeline(config: dict) -> None:
     state = get_state()
     state.clear_stop()
@@ -459,7 +512,7 @@ def _run_pipeline(config: dict) -> None:
                 ctx.set_status("stopped", "已停止")
                 return
             if not filtered:
-                if ctx.wait_retry(retry_interval):
+                if _wait_between_rounds(ctx, buyer, retry_interval):
                     return
                 continue
 
@@ -569,7 +622,7 @@ def _run_pipeline(config: dict) -> None:
         if acc >= target:
             break
         ctx.debug(f"本轮无满足条件饰品，等待 {retry_interval}s 重新拉取")
-        if ctx.wait_retry(retry_interval):
+        if _wait_between_rounds(ctx, buyer, retry_interval):
             return
 
     ctx.set_status("running", "STEAM_COOLDOWN")
