@@ -2,6 +2,7 @@ import json
 import re
 import time
 from typing import Callable, Dict, Optional, Set, Tuple
+from urllib.parse import unquote
 import requests
 from bs4 import BeautifulSoup
 STEAM_REQUEST_TIMEOUT = 25
@@ -196,12 +197,44 @@ def fetch_my_listings(cookies, debug_fn: Optional[Callable[[str], None]] = None)
 _HOVER_PATTERN = re.compile(
     r"CreateItemHoverFromContainer\s*\(\s*g_rgAssets\s*,\s*'(history_row_\d+_\d+)_name'\s*,\s*(\d+)\s*,\s*'(\d+)'\s*,\s*'(\d+)'"
 )
+
+
+def _history_account_currency(cookies: dict) -> Optional[str]:
+    from app.accounts import get_current_account
+
+    account = get_current_account() or {}
+    cookie_steam_id = unquote(str(cookies.get("steamLoginSecure") or "")).partition("||")[0]
+    if not cookie_steam_id.isdigit() or cookie_steam_id != str(account.get("steam_id") or ""):
+        return None
+    return str(account.get("currency_code") or "").strip().upper() or None
+
+
+def _currency_code_from_price_text(text: str, account_currency: Optional[str] = None) -> Optional[str]:
+    s = text or ""
+    if "¥" in s or "￥" in s or "CNY" in s or "RMB" in s:
+        return "CNY"
+    if "HK" in s and "$" in s:
+        return "HKD"
+    if "₹" in s:
+        return "INR"
+    if "₽" in s:
+        return "RUB"
+    if "€" in s:
+        return "EUR"
+    if "USD" in s or "US$" in s:
+        return "USD"
+    if "$" in s:
+        return "USD"
+    return account_currency if re.fullmatch(r"[\d\s.,+-]+", s) else None
+
+
 def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = None) -> Tuple[bool, Dict[str, float], str]:
     try:
         c = _cookies_to_dict(cookies)
         if not c.get("steamLoginSecure"):
             _debug(debug_fn, "[myhistory] 无 steamLoginSecure，未登录")
             return False, {}, "未登录 Steam"
+        account_currency = _history_account_currency(c)
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -244,23 +277,6 @@ def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = N
                 _debug(debug_fn, f"[myhistory] 汇率读取完成, 可用币种: {list(rate_map.keys())[:5]}")
         except Exception:
             rate_map = {}
-        def _currency_code_from_price_text(text: str) -> str:
-            s = text or ""
-            if "¥" in s or "￥" in s or "CNY" in s or "RMB" in s:
-                return "CNY"
-            if "HK" in s and "$" in s:
-                return "HKD"
-            if "₹" in s:
-                return "INR"
-            if "₽" in s:
-                return "RUB"
-            if "€" in s:
-                return "EUR"
-            if "USD" in s or "US$" in s:
-                return "USD"
-            if "$" in s:
-                return "USD"
-            return "CNY"
         soup = BeautifulSoup(html, "html.parser")
         rows = [div for div in soup.find_all("div", class_="market_listing_row") if (div.get("id") or "").startswith("history_row_")]
         _debug(debug_fn, f"[myhistory] results_html 中 history_row_ 行数: {len(rows)}")
@@ -297,7 +313,10 @@ def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = N
             if not price_el:
                 continue
             raw_text = price_el.get_text() or ""
-            cur_code = _currency_code_from_price_text(raw_text)
+            cur_code = _currency_code_from_price_text(raw_text, account_currency)
+            if not cur_code:
+                _debug(debug_fn, "[myhistory] 无法确认成交币种，跳过该条价格回读")
+                continue
             text = raw_text.replace(",", ".")
             m = re.search(r"[\d.]+", text)
             if m:
@@ -306,9 +325,11 @@ def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = N
                     cny_raw = raw
                     if cur_code != "CNY":
                         rate = rate_map.get(cur_code)
-                        if rate:
-                            cny_raw = raw * rate
-                            _debug(debug_fn, f"[myhistory] {cur_code} {raw} -> CNY {cny_raw:.4f}")
+                        if not rate or rate <= 0:
+                            _debug(debug_fn, f"[myhistory] 缺少 {cur_code} 汇率，跳过该条价格回读")
+                            continue
+                        cny_raw = raw * rate
+                        _debug(debug_fn, f"[myhistory] {cur_code} {raw} -> CNY {cny_raw:.4f}")
                     sold[assetid] = round(cny_raw * 1.15, 2)
                 except (ValueError, TypeError):
                     pass

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import requests
 from bs4 import BeautifulSoup
+from app.steam_listings import _currency_code_from_price_text, _history_account_currency
 try:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -44,24 +45,7 @@ def _load_rate_map() -> dict:
     except Exception:
         pass
     return {}
-def _currency_code_from_price_text(text: str) -> str:
-    s = text or ""
-    if "¥" in s or "￥" in s or "CNY" in s or "RMB" in s:
-        return "CNY"
-    if "HK" in s and "$" in s:
-        return "HKD"
-    if "₹" in s:
-        return "INR"
-    if "₽" in s:
-        return "RUB"
-    if "€" in s:
-        return "EUR"
-    if "USD" in s or "US$" in s:
-        return "USD"
-    if "$" in s:
-        return "USD"
-    return "CNY"
-def _parse_sold_history_page(data: dict, rate_map: dict) -> tuple:
+def _parse_sold_history_page(data: dict, rate_map: dict, account_currency: str = None) -> tuple:
     row_to_assetid = {}
     for m in HOVER_PATTERN.finditer(data.get("hovers") or ""):
         row_to_assetid[m.group(1)] = str(m.group(4))
@@ -110,7 +94,9 @@ def _parse_sold_history_page(data: dict, rate_map: dict) -> tuple:
         if not price_el:
             continue
         raw_text = price_el.get_text() or ""
-        cur_code = _currency_code_from_price_text(raw_text)
+        cur_code = _currency_code_from_price_text(raw_text, account_currency)
+        if not cur_code:
+            continue
         text = raw_text.replace(",", ".")
         m = re.search(r"[\d.]+", text)
         if m:
@@ -119,8 +105,9 @@ def _parse_sold_history_page(data: dict, rate_map: dict) -> tuple:
                 cny_raw = raw
                 if cur_code != "CNY":
                     rate = rate_map.get(cur_code)
-                    if rate:
-                        cny_raw = raw * rate
+                    if not rate or rate <= 0:
+                        continue
+                    cny_raw = raw * rate
                 sale_price = round(cny_raw * 1.15, 2)
                 sold[assetid] = sale_price
                 sold_names[assetid] = name
@@ -145,6 +132,7 @@ def _fetch_sold_with_names(cookies: dict) -> tuple:
     sold = {}
     sold_names = {}
     rate_map = _load_rate_map()
+    account_currency = _history_account_currency(cookies)
     start = 0
     total_count = None
     for _ in range(HISTORY_MAX_PAGES):
@@ -157,7 +145,7 @@ def _fetch_sold_with_names(cookies: dict) -> tuple:
             raise RuntimeError(data.get("message", "请求失败"))
         if total_count is None:
             total_count = _history_total_count(data)
-        page_sold, page_names, row_count = _parse_sold_history_page(data, rate_map)
+        page_sold, page_names, row_count = _parse_sold_history_page(data, rate_map, account_currency)
         sold.update(page_sold)
         sold_names.update(page_names)
         if row_count <= 0:
