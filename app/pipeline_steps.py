@@ -257,25 +257,17 @@ def _fetch_steam_sell_data(
     *,
     return_error: bool = False,
 ):
-    from app.config_loader import get_steam_credentials
+    from app.services.steam_auth import get_steam_market_credentials
     from steam.session import create_market_session
     from steam.market_orders import get_sell_orders_cny, compute_smart_list_price
     name = (market_hash_name or "").strip()
     if not name:
         reason = "Steam 市场名为空"
         return (None, reason) if return_error else None
-    cred = get_steam_credentials()
-    cookies = cred.get("cookies", "")
-    steam_id = cred.get("steam_id", "")
-    if not cookies or not steam_id:
-        missing = []
-        if not cookies:
-            missing.append("Cookie")
-        if not steam_id:
-            missing.append("steam_id")
-        reason = "Steam 凭据缺失: " + "、".join(missing)
-        return (None, reason) if return_error else None
     try:
+        cred = get_steam_market_credentials()
+        cookies = cred.get("cookies", "")
+        steam_id = cred.get("steam_id", "")
         session = create_market_session(cookies, steam_id)
         cfg = config.get("pipeline", {})
         wall_volume = int(cfg.get("sell_price_wall_volume", 20))

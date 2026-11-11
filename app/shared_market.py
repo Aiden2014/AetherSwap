@@ -4,7 +4,9 @@
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Optional, Set
-from app.config_loader import get_steam_credentials, load_app_config_validated
+from app.config_loader import load_app_config_validated
+from app.services.steam_auth import get_steam_market_credentials
+from steam.request_policy import SteamMarketCooldownActive
 _BATCH_MAX_WORKERS = 4
 def get_steam_smart_price_cny(session, market_hash_name: str, app_id: int = 730) -> Optional[float]:
     """获取单个物品的 Steam 市场智能报价（CNY）.
@@ -34,7 +36,13 @@ def batch_fetch_prices(names: Set[str], app_id: int = 730) -> Dict[str, float]:
     from steam.session import create_market_session
     if not names:
         return {}
-    cred = get_steam_credentials()
+    try:
+        cred = get_steam_market_credentials()
+    except (RuntimeError, SteamMarketCooldownActive) as exc:
+        from app.state import log
+
+        log(str(exc), "warn", category="steam")
+        return {}
     cookies = cred.get("cookies", "")
     steam_id = cred.get("steam_id", "")
     if not cookies or not steam_id:

@@ -3,6 +3,7 @@ Steam authentication service – extracted from api.py.
 Contains steampy-based login automation, profile fetching,
 and auto-relogin logic.
 """
+import hashlib
 import re
 import threading
 import time
@@ -585,6 +586,51 @@ def _coordinate_steam_login(account: dict) -> tuple:
             _steam_auth_inflight = None
 def try_steam_auto_relogin() -> tuple:
     return _coordinate_steam_login(get_current_account())
+
+
+_market_login_lock = threading.Lock()
+_market_login_failure = None
+_MARKET_LOGIN_RETRY_SECONDS = 30
+
+
+def get_steam_market_credentials() -> dict:
+    """Refresh expired login before public market reads can fall back to IP currency."""
+    global _market_login_failure
+    with _market_login_lock:
+        credentials = get_steam_credentials()
+        cookies = (credentials.get("cookies") or "").strip()
+        steam_id = str(credentials.get("steam_id") or "")
+        if not steam_id or "steamLoginSecure=" not in cookies:
+            raise RuntimeError("缺少 Steam 登录凭据，请在设置中验证 Steam 登录后重试")
+        if not steam_login_cookie_expired(cookies):
+            _market_login_failure = None
+            return credentials
+
+        from steam.request_policy import check_steam_market_cooldown
+
+        check_steam_market_cooldown()
+        account_id = (get_current_account() or {}).get("id")
+        fingerprint = hashlib.sha256(f"{account_id}\0{steam_id}\0{cookies}".encode()).hexdigest()
+        error = "Steam 登录 Cookie 已过期，自动刷新未完成，请在设置中验证 Steam 登录后重试"
+        if (_market_login_failure is not None
+                and _market_login_failure[0] == fingerprint
+                and time.monotonic() - _market_login_failure[1] < _MARKET_LOGIN_RETRY_SECONDS):
+            raise RuntimeError(error)
+        log("[Steam 市场] 登录 Cookie 已过期，尝试自动刷新登录", "info", category="steam")
+        ok, _, _ = try_steam_auto_relogin()
+        refreshed = get_steam_credentials()
+        if (str(refreshed.get("steam_id") or "") != steam_id
+                or (get_current_account() or {}).get("id") != account_id):
+            raise RuntimeError("当前 Steam 账号已切换，本次行情查询已取消")
+        refreshed_cookies = (refreshed.get("cookies") or "").strip()
+        if (not ok or "steamLoginSecure=" not in refreshed_cookies
+                or steam_login_cookie_expired(refreshed_cookies)):
+            _market_login_failure = (fingerprint, time.monotonic())
+            raise RuntimeError(error)
+        _market_login_failure = None
+        return refreshed
+
+
 def _try_steam_auto_relogin_impl(cur: Optional[dict] = None) -> tuple:
     cur = dict(cur or get_current_account() or {})
     if not cur:
