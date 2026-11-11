@@ -366,3 +366,44 @@ def test_market_price_can_be_cleared_and_invalid_values_block_import(page):
     page.locator('#inventory-holdings-save').click()
     page.wait_for_function('window.savedImports.length === 1')
     assert page.evaluate('savedImports[0]') == [{'assetid': '111', 'price': 12.34}]
+
+
+def test_three_case_records_fill_matching_market_prices_and_survive_sync(page):
+    page.evaluate('''() => {
+      const original = fetchJson;
+      fetchJson = (url, options) => url.endsWith('/preview') ? Promise.resolve({ok: true,
+        items: ['111', '222'].map(assetid => ({assetid, name: 'Fracture Case', source: 'buff_choices',
+          price_candidates: [{price: 2.13, count: 1}, {price: 2.14, count: 2}],
+          purchase_candidates: [
+            {purchase_id: 'first', price: 2.14, purchased_at: 1785559200, market_price: 3.5},
+            {purchase_id: 'second', price: 2.13, purchased_at: 1785555600, market_price: 3.6},
+            {purchase_id: 'third', price: 2.14, purchased_at: 1785552000, market_price: 3.7},
+          ].map(record => ({...record, market_price_note: 'Steam 历史成交价参考'}))
+        }))}) : original(url, options);
+    }''')
+    page.locator('#inv-table .inv-select').nth(0).check()
+    page.locator('#inv-table .inv-select').nth(1).check()
+    page.locator('#btn-inventory-add-holdings').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    choices = page.locator('.inv-holding-purchase-choice')
+    choices.nth(0).select_option('first')
+    choices.nth(1).select_option('second')
+    assert page.locator('.inv-holding-price').nth(0).input_value() == '2.14'
+    assert page.locator('.inv-holding-market-price').nth(0).input_value() == '3.50'
+    assert page.locator('.inv-holding-price').nth(1).input_value() == '2.13'
+    assert page.locator('.inv-holding-market-price').nth(1).input_value() == '3.60'
+    choices.nth(0).select_option('third')
+    assert page.locator('.inv-holding-price').nth(0).input_value() == '2.14'
+    assert page.locator('.inv-holding-market-price').nth(0).input_value() == '3.70'
+    page.locator('#inventory-holdings-sync').click()
+    page.wait_for_function('!inventoryHoldingsBusy')
+    assert choices.nth(0).input_value() == 'third'
+    assert choices.nth(1).input_value() == 'second'
+    assert page.locator('.inv-holding-market-price').nth(0).input_value() == '3.70'
+    assert page.locator('.inv-holding-market-price').nth(1).input_value() == '3.60'
+    page.locator('#inventory-holdings-save').click()
+    page.wait_for_function('window.savedImports.length === 1')
+    assert page.evaluate('savedImports[0]') == [
+        {'assetid': '111', 'price': 2.14, 'market_price': 3.7, 'purchased_at': 1785552000},
+        {'assetid': '222', 'price': 2.13, 'market_price': 3.6, 'purchased_at': 1785555600},
+    ]
