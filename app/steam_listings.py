@@ -210,8 +210,13 @@ def _history_account_currency(cookies: dict) -> Optional[str]:
 
 
 def _currency_code_from_price_text(text: str, account_currency: Optional[str] = None) -> Optional[str]:
-    s = text or ""
-    if "¥" in s or "￥" in s or "CNY" in s or "RMB" in s:
+    s = (text or "").strip()
+    upper = s.upper()
+    # Ukrainian Steam wallets may label prices with the symbol, ISO code,
+    # or localized abbreviation. Detect these before the numeric fallback.
+    if "₴" in s or "ГРН" in upper or re.search(r"(?<![A-Z])UAH(?![A-Z])", upper):
+        return "UAH"
+    if "¥" in s or "￥" in s or "CNY" in upper or "RMB" in upper:
         return "CNY"
     if "HK" in s and "$" in s:
         return "HKD"
@@ -228,7 +233,53 @@ def _currency_code_from_price_text(text: str, account_currency: Optional[str] = 
     return account_currency if re.fullmatch(r"[\d\s.,+-]+", s) else None
 
 
-def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = None) -> Tuple[bool, Dict[str, float], str]:
+def _parse_history_price_amount(raw_text: str) -> Optional[float]:
+    """Parse Steam localized prices while preserving decimal/grouping separators."""
+    compact = re.sub(r"[^0-9,.-]", "", raw_text or "").strip()
+    compact = re.sub(r"[,.]+$", "", compact)
+    if not compact:
+        return None
+
+    negative = compact.startswith("-")
+    compact = compact.lstrip("-")
+    if not compact:
+        return None
+
+    comma_pos = compact.rfind(",")
+    dot_pos = compact.rfind(".")
+    if comma_pos >= 0 and dot_pos >= 0:
+        # The last punctuation mark is the decimal separator.
+        decimal_pos = max(comma_pos, dot_pos)
+        integer_part = re.sub(r"[,.]", "", compact[:decimal_pos])
+        fraction_part = re.sub(r"[,.]", "", compact[decimal_pos + 1:])
+        normalized = f"{integer_part or '0'}.{fraction_part}" if fraction_part else integer_part
+    elif comma_pos >= 0 or dot_pos >= 0:
+        separator = "," if comma_pos >= 0 else "."
+        parts = compact.split(separator)
+        if len(parts) == 2 and 1 <= len(parts[1]) <= 2:
+            normalized = f"{parts[0] or '0'}.{parts[1]}"
+        elif len(parts) > 2 and 1 <= len(parts[-1]) <= 2:
+            normalized = f"{''.join(parts[:-1]) or '0'}.{parts[-1]}"
+        else:
+            # A three-digit suffix is treated as a thousands group.
+            normalized = "".join(parts)
+    else:
+        normalized = compact
+
+    try:
+        value = float(normalized)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if negative or value <= 0:
+        return None
+    return value
+
+
+def fetch_my_history_sold(
+    cookies,
+    debug_fn: Optional[Callable[[str], None]] = None,
+    sold_assetids_out: Optional[Set[str]] = None,
+) -> Tuple[bool, Dict[str, float], str]:
     try:
         c = _cookies_to_dict(cookies)
         if not c.get("steamLoginSecure"):
@@ -273,6 +324,7 @@ def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = N
                     fx = json.load(f)
                 if isinstance(fx, dict) and isinstance(fx.get("rates"), dict):
                     rate_map = {k: float(v) for k, v in fx["rates"].items() if isinstance(v, (int, float))}
+            rate_map = {str(k).strip().upper(): v for k, v in rate_map.items()}
             if rate_map:
                 _debug(debug_fn, f"[myhistory] 汇率读取完成, 可用币种: {list(rate_map.keys())[:5]}")
         except Exception:
@@ -309,30 +361,39 @@ def fetch_my_history_sold(cookies, debug_fn: Optional[Callable[[str], None]] = N
             if not any(s in status_text for s in ("Sold", "已售出", "出售")):
                 continue
             sold_rows += 1
+            # Preserve the authoritative Sold signal even if the price cannot
+            # be parsed or converted; the caller can show "price pending".
+            if sold_assetids_out is not None:
+                sold_assetids_out.add(assetid)
             price_el = row.find("span", class_="market_listing_price")
             if not price_el:
                 continue
-            raw_text = price_el.get_text() or ""
+            raw_text = price_el.get_text(" ", strip=True) or ""
             cur_code = _currency_code_from_price_text(raw_text, account_currency)
             if not cur_code:
-                _debug(debug_fn, "[myhistory] 无法确认成交币种，跳过该条价格回读")
+                _debug(
+                    debug_fn,
+                    f"[myhistory] 无法确认成交币种，跳过该条价格回读: "
+                    f"raw_price={raw_text!r}, account_currency={account_currency!r}",
+                )
                 continue
-            text = raw_text.replace(",", ".")
-            m = re.search(r"[\d.]+", text)
-            if m:
-                try:
-                    raw = float(m.group(0))
-                    cny_raw = raw
-                    if cur_code != "CNY":
-                        rate = rate_map.get(cur_code)
-                        if not rate or rate <= 0:
-                            _debug(debug_fn, f"[myhistory] 缺少 {cur_code} 汇率，跳过该条价格回读")
-                            continue
-                        cny_raw = raw * rate
-                        _debug(debug_fn, f"[myhistory] {cur_code} {raw} -> CNY {cny_raw:.4f}")
-                    sold[assetid] = round(cny_raw * 1.15, 2)
-                except (ValueError, TypeError):
-                    pass
+            raw = _parse_history_price_amount(raw_text)
+            if raw is None:
+                _debug(debug_fn, f"[myhistory] 成交价格金额无法解析，跳过: {raw_text!r}")
+                continue
+
+            cny_raw = raw
+            if cur_code != "CNY":
+                rate = rate_map.get(cur_code)
+                if not rate or rate <= 0:
+                    _debug(
+                        debug_fn,
+                        f"[myhistory] 缺少 {cur_code} 汇率，跳过该条价格回读",
+                    )
+                    continue
+                cny_raw = raw * rate
+                _debug(debug_fn, f"[myhistory] {cur_code} {raw} -> CNY {cny_raw:.4f}")
+            sold[assetid] = round(cny_raw * 1.15, 2)
         _debug(debug_fn, f"[myhistory] 行->assetid: hover {hover_hits}, fallback {fallback_hits}; Sold 行 {sold_rows}, sold_map 条数 {len(sold)}, 示例: {list(sold.items())[:5]}")
         return True, sold, ""
     except Exception as e:

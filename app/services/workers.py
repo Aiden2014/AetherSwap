@@ -367,44 +367,112 @@ def listing_check_worker() -> None:
                 log(f"[listing_check] 本地 {len(listing_idx)} 条在售, Steam 活跃 {len(active_ids)}, 可能已售 {len(not_in_active)} 条", "debug", category="steam")
             if not not_in_active:
                 continue
-            ok2, sold_map, _ = fetch_my_history_sold(cookies, debug_fn=debug_fn)
+            sold_assetids: set = set()
+            ok2, sold_map, _ = fetch_my_history_sold(
+                cookies,
+                debug_fn=debug_fn,
+                sold_assetids_out=sold_assetids,
+            )
+            # A partial set must not be trusted if the history request failed.
+            if not ok2:
+                sold_assetids.clear()
+
             seen_aids = set()
             sold_updates = 0
+            confirmed_sold_updates = 0
             for _i, p in not_in_active:
                 aid = str(p.get("assetid") or "")
                 if not aid or aid in seen_aids:
                     continue
                 seen_aids.add(aid)
                 db_id = p.get("_db_id")
-                sale_price_rounded = round(sold_map[aid], 2) if (ok2 and aid in sold_map) else None
+                confirmed_sold = aid in sold_assetids
+                if confirmed_sold:
+                    confirmed_sold_updates += 1
+                sale_price_rounded = (
+                    round(sold_map[aid], 2)
+                    if confirmed_sold and aid in sold_map
+                    else None
+                )
+
                 if db_id:
                     if sale_price_rounded is not None:
                         sold_at = time.time()
-                        update_purchase_by_id(db_id, {"sale_price": sale_price_rounded, "sold_at": sold_at, "listing": False, "listing_status": None})
+                        update_purchase_by_id(
+                            db_id,
+                            {
+                                "sale_price": sale_price_rounded,
+                                "sold_at": sold_at,
+                                "listing": False,
+                                "listing_status": None,
+                            },
+                        )
                         sold_updates += 1
+                    elif confirmed_sold:
+                        update_purchase_by_id(
+                            db_id,
+                            {"listing": False, "listing_status": "sold_pending_price"},
+                        )
                     else:
-                        update_purchase_by_id(db_id, {"listing": False, "listing_status": "error"})
+                        update_purchase_by_id(
+                            db_id,
+                            {"listing": False, "listing_status": "error"},
+                        )
                 else:
                     current = get_purchases()
-                    matched = [j for j, q in enumerate(current) if str(q.get("assetid") or "") == aid]
+                    matched = [
+                        j for j, q in enumerate(current)
+                        if str(q.get("assetid") or "") == aid
+                    ]
                     if sale_price_rounded is not None:
                         sold_at = time.time()
                         for idx in matched:
-                            update_purchase(idx, {"sale_price": sale_price_rounded, "sold_at": sold_at, "listing": False, "listing_status": None})
+                            update_purchase(
+                                idx,
+                                {
+                                    "sale_price": sale_price_rounded,
+                                    "sold_at": sold_at,
+                                    "listing": False,
+                                    "listing_status": None,
+                                },
+                            )
                         if matched:
                             sold_updates += 1
+                    elif confirmed_sold:
+                        for idx in matched:
+                            update_purchase(
+                                idx,
+                                {"listing": False, "listing_status": "sold_pending_price"},
+                            )
                     else:
                         for idx in matched:
-                            update_purchase(idx, {"listing": False, "listing_status": "error"})
-            if sold_updates > 0:
-                log(f"[listing_check] 确认售出 {sold_updates} 件，刷新库存并触发自动补挂", "info", category="steam")
+                            update_purchase(
+                                idx,
+                                {"listing": False, "listing_status": "error"},
+                            )
+
+            # Inventory must be refreshed for confirmed sales even when Steam's
+            # Sold status is known but the amount/currency is temporarily unreadable.
+            # Do not trigger auto-listing solely because a sale price is pending.
+            if confirmed_sold_updates > 0:
+                log(
+                    f"[listing_check] Steam 历史确认售出 {confirmed_sold_updates} 件，"
+                    f"其中成功回读价格 {sold_updates} 件；刷新库存",
+                    "info",
+                    category="steam",
+                )
                 ok_inv, inv_items, inv_err = scan_cs2_inventory()
                 if ok_inv:
                     set_inventory(inv_items)
-                    from app.sell_pipeline import run_sell_phase_on_inventory_update
-                    run_sell_phase_on_inventory_update(inv_items)
+                    if sold_updates > 0:
+                        from app.sell_pipeline import run_sell_phase_on_inventory_update
+                        run_sell_phase_on_inventory_update(inv_items)
                 else:
-                    log(f"[listing_check] 售出后刷新库存失败，暂不补挂: {inv_err}", "warn", category="steam")
+                    log(
+                        f"[listing_check] 售出后刷新库存失败: {inv_err}",
+                        "warn",
+                        category="steam",
+                    )
         except Exception as e:
             log(f"listing_check_worker 异常 {type(e).__name__}: {e}", "error", category="steam")
             _worker_alert("listing_check_worker", e)

@@ -10,7 +10,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import requests
 from bs4 import BeautifulSoup
-from app.steam_listings import _currency_code_from_price_text, _history_account_currency
+from app.steam_listings import (
+    _currency_code_from_price_text,
+    _history_account_currency,
+    _parse_history_price_amount,
+)
 try:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -93,26 +97,22 @@ def _parse_sold_history_page(data: dict, rate_map: dict, account_currency: str =
         price_el = row.find("span", class_="market_listing_price")
         if not price_el:
             continue
-        raw_text = price_el.get_text() or ""
+        raw_text = price_el.get_text(" ", strip=True) or ""
         cur_code = _currency_code_from_price_text(raw_text, account_currency)
         if not cur_code:
             continue
-        text = raw_text.replace(",", ".")
-        m = re.search(r"[\d.]+", text)
-        if m:
-            try:
-                raw = float(m.group(0))
-                cny_raw = raw
-                if cur_code != "CNY":
-                    rate = rate_map.get(cur_code)
-                    if not rate or rate <= 0:
-                        continue
-                    cny_raw = raw * rate
-                sale_price = round(cny_raw * 1.15, 2)
-                sold[assetid] = sale_price
-                sold_names[assetid] = name
-            except (ValueError, TypeError):
-                pass
+        raw = _parse_history_price_amount(raw_text)
+        if raw is None:
+            continue
+        cny_raw = raw
+        if cur_code != "CNY":
+            rate = rate_map.get(cur_code)
+            if not rate or rate <= 0:
+                continue
+            cny_raw = raw * rate
+        sale_price = round(cny_raw * 1.15, 2)
+        sold[assetid] = sale_price
+        sold_names[assetid] = name
     return sold, sold_names, row_count
 def _history_total_count(data: dict):
     for key in ("total_count", "totalCount", "total"):
@@ -131,7 +131,10 @@ def _fetch_sold_with_names(cookies: dict) -> tuple:
     }
     sold = {}
     sold_names = {}
-    rate_map = _load_rate_map()
+    rate_map = {
+        str(key).strip().upper(): value
+        for key, value in _load_rate_map().items()
+    }
     account_currency = _history_account_currency(cookies)
     start = 0
     total_count = None

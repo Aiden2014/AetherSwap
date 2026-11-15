@@ -14,7 +14,7 @@ COOKIES = f"steamLoginSecure={STEAM_ID}%7C%7Ctest; sessionid=test"
 @pytest.fixture(params=["automatic", "rebuild"])
 def history(monkeypatch, tmp_path, request):
     account = {"id": "account-1", "steam_id": STEAM_ID, "currency_code": "USD"}
-    rates = {"USD": 7.0, "HKD": 0.9, "INR": 0.08}
+    rates = {"USD": 7.0, "HKD": 0.9, "INR": 0.08, "UAH": 0.18}
     monkeypatch.setattr(accounts, "get_current_account", lambda: account.copy())
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -63,8 +63,16 @@ def test_price_without_unit_uses_current_account_currency(history, currency, exp
     assert history.read(" 10.00 ") == {"123": expected}
 
 
-@pytest.mark.parametrize("price,expected", [("US$ 10.00", 80.5), ("¥ 10.00", 11.5),
-                                            ("HK$ 10.00", 10.35), ("₹ 10.00", 0.92)])
+@pytest.mark.parametrize("price,expected", [
+    ("US$ 10.00", 80.5),
+    ("¥ 10.00", 11.5),
+    ("HK$ 10.00", 10.35),
+    ("₹ 10.00", 0.92),
+    ("₴ 10,00", 2.07),
+    ("10,00 грн.", 2.07),
+    ("UAH 10.00", 2.07),
+    ("₴ 1 234,56", 255.55),
+  ])
 def test_explicit_price_currency_takes_precedence_over_account_currency(history, price, expected):
     history.account["currency_code"] = "JPY"
 
@@ -109,3 +117,59 @@ def test_explicit_cny_price_still_works_without_current_account(history):
     history.account.clear()
 
     assert history.read("¥ 10.00") == {"123": 11.5}
+
+
+
+def test_sold_assetids_are_collected_even_when_currency_rate_is_missing(monkeypatch, tmp_path):
+    account = {"id": "account-1", "steam_id": STEAM_ID, "currency_code": "UAH"}
+    monkeypatch.setattr(accounts, "get_current_account", lambda: account.copy())
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "exchange_rate.json").write_text(json.dumps({"rates": {}}), encoding="utf-8")
+    monkeypatch.setattr(steam_listings, "__file__", str(tmp_path / "app" / "steam_listings.py"))
+
+    data = {
+        "success": True,
+        "total_count": 1,
+        "results_html": """
+            <div class="market_listing_row" id="history_row_1_0">
+              <div class="market_listing_listed_date_combined">Sold</div>
+              <span class="market_listing_price">₴ 10,00</span>
+            </div>
+        """,
+        "hovers": "CreateItemHoverFromContainer( g_rgAssets, 'history_row_1_0_name', 730, '2', '123' );",
+    }
+
+    monkeypatch.setattr(
+        steam_listings,
+        "_get_with_retry",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            status_code=200,
+            text=json.dumps(data),
+            json=lambda: data,
+        ),
+    )
+
+    sold_assetids = set()
+    ok, sold, error = steam_listings.fetch_my_history_sold(
+        COOKIES,
+        sold_assetids_out=sold_assetids,
+    )
+
+    assert ok, error
+    assert sold == {}
+    assert sold_assetids == {"123"}
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("₴ 1 234,56 грн.", 1234.56),
+        ("UAH 1,234.56", 1234.56),
+        ("1.234,56 грн.", 1234.56),
+        ("10,00", 10.0),
+    ],
+)
+def test_localized_history_amount_parser(raw, expected):
+    assert steam_listings._parse_history_price_amount(raw) == expected
