@@ -429,9 +429,15 @@ def build_history_price_preview() -> dict:
                 listing_gap_pct = abs(suggested_price - listing_price) / listing_price * 100.0
 
         if currency == "CNY" and exact_purchase_asset:
-            # CNY history requires no FX inference. Existing positive values
-            # still require a matching listing anchor before correction.
-            confidence = "高" if (old_price is None or direct_listing_anchor) else "低"
+            # CNY history requires no FX inference. Missing values can use
+            # the explicit Steam Sold amount; an existing positive value is
+            # replaced only when a matching listing anchor corroborates it.
+            if old_price is None:
+                confidence = "高"
+            elif direct_listing_anchor and listing_gap_pct is not None and listing_gap_pct <= 8.0:
+                confidence = "高"
+            else:
+                confidence = "低"
         elif (
             direct_listing_anchor
             and exact_purchase_asset
@@ -484,6 +490,8 @@ def build_history_price_preview() -> dict:
         suggestions.append({
             "candidate_id": str(purchase_id),
             "purchase_id": purchase_id,
+            "expected_purchase_assetid": str(purchase.get("assetid") or ""),
+            "expected_purchase_at": _as_number(purchase.get("at")),
             "name": purchase.get("name") or sold.get("name") or "未知物品",
             "assetid": sold["assetid"],
             "current_sale_price": old_price,

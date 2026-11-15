@@ -98,6 +98,8 @@ def api_history_price_repair_apply(body: ApplyHistoryPriceRepairBody):
     for item in selected:
         updates.append({
             "purchase_id": int(item["purchase_id"]),
+            "expected_assetid": item.get("expected_purchase_assetid"),
+            "expected_purchase_at": item.get("expected_purchase_at"),
             "expected_old_sale_price": item.get("current_sale_price"),
             "new_sale_price": float(item["suggested_sale_price"]),
             "metadata": {

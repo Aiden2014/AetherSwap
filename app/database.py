@@ -337,6 +337,13 @@ def db_apply_history_price_repairs(batch_id: str, updates: list, backup_path: st
                 row = session.get(Purchase, purchase_id)
                 if row is None:
                     raise ValueError(f"操作记录 {purchase_id} 已不存在，请重新生成预览")
+                expected_assetid = item.get("expected_assetid")
+                if expected_assetid is not None and str(row.assetid or "") != str(expected_assetid):
+                    raise ValueError(f"操作记录 {purchase_id} 的 AssetID 已变化，请重新生成预览")
+                expected_purchase_at = item.get("expected_purchase_at")
+                if expected_purchase_at is not None:
+                    if row.at is None or abs(float(row.at) - float(expected_purchase_at)) > 0.5:
+                        raise ValueError(f"操作记录 {purchase_id} 的购入时间已变化，请重新生成预览")
                 expected_old = item.get("expected_old_sale_price")
                 current_old = row.sale_price
                 if expected_old is None:
