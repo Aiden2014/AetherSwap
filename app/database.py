@@ -383,6 +383,7 @@ def db_get_history_price_repair_audits(limit: int = 100) -> list:
             "old_sale_price": row.old_sale_price,
             "new_sale_price": row.new_sale_price,
             "backup_path": row.backup_path,
+            "metadata_json": row.metadata_json,
             "created_at": row.created_at,
             "rolled_back_at": row.rolled_back_at,
         } for row in rows]

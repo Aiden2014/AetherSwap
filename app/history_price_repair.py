@@ -310,17 +310,22 @@ def build_history_price_preview() -> dict:
         sold_at = _as_number(sold.get("sold_at"))
         listing = _select_listing_for_sold(sold_at, listings_by_assetid.get(assetid, []))
         implied_rate = None
-        if listing and amount and currency:
-            implied_rate = float(listing["price"]) / (amount * STEAM_FEE_FACTOR)
-            if math.isfinite(implied_rate) and implied_rate > 0:
-                calibration_by_currency[currency].append({
-                    "rate": implied_rate,
-                    "sold_at": sold_at,
-                    "assetid": assetid,
-                })
-                listing_match_count += 1
-            else:
-                implied_rate = None
+        if listing and amount and currency and sold_at is not None:
+            listing_at = _as_number(listing.get("at"))
+            listing_age = float(sold_at) - listing_at if listing_at is not None else None
+            # A stale listing is not evidence of the final price or the FX
+            # rate at sale time. Only use listings made within 7 days of sale.
+            if listing_age is not None and 0 <= listing_age <= 7 * 24 * 60 * 60:
+                implied_rate = float(listing["price"]) / (amount * STEAM_FEE_FACTOR)
+                if math.isfinite(implied_rate) and implied_rate > 0:
+                    calibration_by_currency[currency].append({
+                        "rate": implied_rate,
+                        "sold_at": sold_at,
+                        "assetid": assetid,
+                    })
+                    listing_match_count += 1
+                else:
+                    implied_rate = None
         prepared.append({
             **sold,
             "assetid": assetid,
@@ -386,21 +391,28 @@ def build_history_price_preview() -> dict:
                 nearby = [
                     row for row in sample_rows
                     if row["sold_at"] is not None
+                    and row["assetid"] != sold["assetid"]
                     and abs(float(row["sold_at"]) - float(sold["sold_at"])) <= CALIBRATION_WINDOW_SECONDS
                 ]
             else:
                 nearby = []
-            if sold["own_implied_rate"] is not None:
+            if sold["own_implied_rate"] is not None and sold["sold_at"] is not None:
                 own_sample = {
                     "rate": sold["own_implied_rate"],
                     "sold_at": sold["sold_at"],
                     "assetid": sold["assetid"],
                 }
-                if not any(row["assetid"] == own_sample["assetid"] for row in nearby):
-                    nearby.append(own_sample)
+                nearby.append(own_sample)
+            # Count independent items, not repeated history rows for the
+            # same asset. A single listing must never authorize a foreign-FX
+            # repair by itself.
+            unique_samples = {}
+            for sample in nearby:
+                unique_samples.setdefault(sample["assetid"], sample)
+            nearby = list(unique_samples.values())
             rate, dispersion_pct = _median_and_mad([row["rate"] for row in nearby])
-            sample_count = len({row["assetid"] for row in nearby})
-            if rate is None or (not direct_listing_anchor and sample_count < 3):
+            sample_count = len(nearby)
+            if rate is None:
                 continue
 
         suggested_price = round(float(amount) * float(rate) * STEAM_FEE_FACTOR, 2)
@@ -416,19 +428,35 @@ def build_history_price_preview() -> dict:
             if listing_price and listing_price > 0:
                 listing_gap_pct = abs(suggested_price - listing_price) / listing_price * 100.0
 
-        if direct_listing_anchor and exact_purchase_asset:
-            if (
-                sold["sold_at"] is not None
-                and sample_count >= 3
-                and dispersion_pct <= 3.0
-                and (listing_gap_pct is None or listing_gap_pct <= 5.0)
-            ):
-                confidence = "高"
-            elif sample_count >= 1 and (listing_gap_pct is None or listing_gap_pct <= 8.0):
-                confidence = "中"
-            else:
-                confidence = "低"
-        elif old_price is None and exact_purchase_asset and sold["sold_at"] is not None and sample_count >= 3 and dispersion_pct <= 3.0:
+        if currency == "CNY" and exact_purchase_asset:
+            # CNY history requires no FX inference. Existing positive values
+            # still require a matching listing anchor before correction.
+            confidence = "高" if (old_price is None or direct_listing_anchor) else "低"
+        elif (
+            direct_listing_anchor
+            and exact_purchase_asset
+            and sold["sold_at"] is not None
+            and sample_count >= 3
+            and dispersion_pct <= 3.0
+            and (listing_gap_pct is None or listing_gap_pct <= 5.0)
+        ):
+            confidence = "高"
+        elif (
+            direct_listing_anchor
+            and exact_purchase_asset
+            and sold["sold_at"] is not None
+            and sample_count >= 3
+            and dispersion_pct <= 5.0
+            and (listing_gap_pct is None or listing_gap_pct <= 10.0)
+        ):
+            confidence = "中"
+        elif (
+            old_price is None
+            and exact_purchase_asset
+            and sold["sold_at"] is not None
+            and sample_count >= 3
+            and dispersion_pct <= 3.0
+        ):
             confidence = "中"
         else:
             confidence = "低"
@@ -477,7 +505,11 @@ def build_history_price_preview() -> dict:
             "listing_gap_pct": round(float(listing_gap_pct), 3) if listing_gap_pct is not None else None,
             "confidence": confidence,
             "evidence": "；".join(evidence),
-            "can_apply": confidence in ("高", "中") and (exact_purchase_asset or old_price is None),
+            "can_apply": (
+                confidence in ("高", "中")
+                and exact_purchase_asset
+                and (old_price is None or direct_listing_anchor)
+            ),
         })
 
     suggestions.sort(key=lambda row: (row["confidence"] != "高", row["sold_at"] or 0), reverse=False)

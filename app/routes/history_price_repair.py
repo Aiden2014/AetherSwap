@@ -151,11 +151,27 @@ def api_history_price_repair_audit():
             "backup_path": row.get("backup_path") or "",
         })
         batch["count"] += 1
+        batch.setdefault("items", []).append({
+            "purchase_id": row["purchase_id"],
+            "old_sale_price": row.get("old_sale_price"),
+            "new_sale_price": row.get("new_sale_price"),
+            "rolled_back_at": row.get("rolled_back_at"),
+            "metadata": _safe_metadata(row.get("metadata_json")),
+        })
         if row.get("rolled_back_at") is not None:
             batch["rolled_back_count"] += 1
     result = list(batches.values())
     result.sort(key=lambda row: row["created_at"], reverse=True)
     return {"ok": True, "batches": result[:20]}
+
+
+def _safe_metadata(raw: str) -> dict:
+    import json
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 @router.post("/api/history_price_repair/rollback")

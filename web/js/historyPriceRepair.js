@@ -100,7 +100,17 @@ async function loadHistoryPriceRepairAudit() {
         const rolledBack = Number(batch.rolled_back_count || 0) >= Number(batch.count || 0);
         const status = rolledBack ? "已回滚" : Number(batch.rolled_back_count || 0) > 0 ? "部分回滚" : "已应用";
         const action = rolledBack ? "—" : '<button type="button" class="btn btn-sm btn-danger-outline hpr-rollback" data-batch-id="' + escapeHtml(batch.batch_id) + '">整批回滚</button>';
-        return '<tr><td class="mono">' + escapeHtml(hprFormatTime(batch.created_at)) + '</td><td>' + Number(batch.count || 0) + '</td><td class="small mono">' + escapeHtml(batch.backup_path || "—") + '</td><td>' + status + '</td><td>' + action + '</td></tr>';
+        const details = (batch.items || []).map(function (item) {
+          const meta = item.metadata || {};
+          return '<div class="small">' +
+            escapeHtml(meta.name || ("操作记录 #" + item.purchase_id)) +
+            '：' + hprFormatMoney(item.old_sale_price) + ' → ' + hprFormatMoney(item.new_sale_price) +
+            '；' + escapeHtml(meta.currency_code || "") +
+            '；' + escapeHtml(meta.evidence || "") +
+            (item.rolled_back_at ? ' <span class="muted">（已回滚）</span>' : '') +
+            '</div>';
+        }).join("");
+        return '<tr><td class="mono">' + escapeHtml(hprFormatTime(batch.created_at)) + '</td><td>' + Number(batch.count || 0) + '</td><td class="small mono">' + escapeHtml(batch.backup_path || "—") + '</td><td>' + status + '</td><td>' + action + '<details><summary>查看本批明细</summary>' + details + '</details></td></tr>';
       }).join("") +
       '</tbody></table></div>';
     container.querySelectorAll(".hpr-rollback").forEach(function (button) {
@@ -163,6 +173,8 @@ document.addEventListener("DOMContentLoaded", function () {
         historyPriceRepairPreview = null;
         historyPriceRepairItems = [];
         hprRenderItems();
+        hprUpdateSelection();
+        hprRenderSummary({});
         hprSetStatus("生成预览失败：" + (error.message || ""), true);
       } finally {
         previewButton.disabled = false;
