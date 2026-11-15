@@ -48,6 +48,17 @@ class Sale(SQLModel, table=True):
     price: float = 0.0
     at: float = 0.0
     assetid: Optional[str] = None
+
+class HistoryPriceRepairAudit(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    batch_id: str = Field(index=True)
+    purchase_id: int = Field(index=True)
+    old_sale_price: Optional[float] = None
+    new_sale_price: float = 0.0
+    metadata_json: str = ""
+    backup_path: str = ""
+    created_at: float = 0.0
+    rolled_back_at: Optional[float] = None
 class ItemNameId(SQLModel, table=True):
     market_hash_name: str = Field(primary_key=True)
     item_nameid: str
@@ -308,6 +319,111 @@ def db_get_sales() -> list:
     with get_session() as session:
         rows = session.exec(select(Sale).order_by(Sale.id)).all()
         return [_sale_to_dict(r) for r in rows]
+def db_apply_history_price_repairs(batch_id: str, updates: list, backup_path: str = "") -> int:
+    """Atomically update Purchase.sale_price and record an audit row per item."""
+    from sqlalchemy import text as sa_text
+
+    if not batch_id or not updates:
+        raise ValueError("修复批次或更新列表为空")
+    with get_session() as session:
+        session.execute(sa_text("BEGIN IMMEDIATE"))
+        try:
+            seen_ids = set()
+            for item in updates:
+                purchase_id = int(item.get("purchase_id") or 0)
+                if purchase_id <= 0 or purchase_id in seen_ids:
+                    raise ValueError("修复列表包含无效或重复的 purchase_id")
+                seen_ids.add(purchase_id)
+                row = session.get(Purchase, purchase_id)
+                if row is None:
+                    raise ValueError(f"操作记录 {purchase_id} 已不存在，请重新生成预览")
+                expected_old = item.get("expected_old_sale_price")
+                current_old = row.sale_price
+                if expected_old is None:
+                    if current_old is not None:
+                        raise ValueError(f"操作记录 {purchase_id} 的成交价已变化，请重新生成预览")
+                else:
+                    if current_old is None or abs(float(current_old) - float(expected_old)) > 0.009:
+                        raise ValueError(f"操作记录 {purchase_id} 的成交价已变化，请重新生成预览")
+                new_price = float(item.get("new_sale_price"))
+                if not math.isfinite(new_price) or new_price <= 0:
+                    raise ValueError(f"操作记录 {purchase_id} 的建议价格无效")
+                metadata = item.get("metadata") or {}
+                audit = HistoryPriceRepairAudit(
+                    batch_id=batch_id,
+                    purchase_id=purchase_id,
+                    old_sale_price=current_old,
+                    new_sale_price=round(new_price, 2),
+                    metadata_json=json.dumps(metadata, ensure_ascii=False, separators=(",", ":")),
+                    backup_path=backup_path,
+                    created_at=__import__("time").time(),
+                )
+                row.sale_price = round(new_price, 2)
+                session.add(row)
+                session.add(audit)
+            session.commit()
+            return len(updates)
+        except Exception:
+            session.rollback()
+            raise
+
+
+def db_get_history_price_repair_audits(limit: int = 100) -> list:
+    safe_limit = max(1, min(500, int(limit or 100)))
+    with get_session() as session:
+        rows = session.exec(
+            select(HistoryPriceRepairAudit)
+            .order_by(HistoryPriceRepairAudit.id.desc())
+            .limit(safe_limit)
+        ).all()
+        return [{
+            "id": row.id,
+            "batch_id": row.batch_id,
+            "purchase_id": row.purchase_id,
+            "old_sale_price": row.old_sale_price,
+            "new_sale_price": row.new_sale_price,
+            "backup_path": row.backup_path,
+            "created_at": row.created_at,
+            "rolled_back_at": row.rolled_back_at,
+        } for row in rows]
+
+
+def db_rollback_history_price_repairs(batch_id: str) -> int:
+    """Restore an entire batch only if every current value still matches its audit."""
+    from sqlalchemy import text as sa_text
+
+    if not batch_id:
+        raise ValueError("缺少修复批次 ID")
+    with get_session() as session:
+        session.execute(sa_text("BEGIN IMMEDIATE"))
+        try:
+            audits = session.exec(
+                select(HistoryPriceRepairAudit)
+                .where(HistoryPriceRepairAudit.batch_id == batch_id)
+                .where(HistoryPriceRepairAudit.rolled_back_at.is_(None))
+            ).all()
+            if not audits:
+                raise ValueError("批次不存在或已经回滚")
+            for audit in audits:
+                row = session.get(Purchase, audit.purchase_id)
+                if row is None:
+                    raise ValueError(f"操作记录 {audit.purchase_id} 已不存在，无法安全回滚")
+                if row.sale_price is None or abs(float(row.sale_price) - float(audit.new_sale_price)) > 0.009:
+                    raise ValueError(f"操作记录 {audit.purchase_id} 已被其他操作修改，拒绝整批回滚")
+            rolled_back_at = __import__("time").time()
+            for audit in audits:
+                row = session.get(Purchase, audit.purchase_id)
+                row.sale_price = audit.old_sale_price
+                audit.rolled_back_at = rolled_back_at
+                session.add(row)
+                session.add(audit)
+            session.commit()
+            return len(audits)
+        except Exception:
+            session.rollback()
+            raise
+
+
 def db_clear_transactions() -> None:
     from sqlmodel import delete as sql_delete
     with get_session() as session:

@@ -31,6 +31,7 @@ async function tabSwitch(name) {
   if (name === "inventory") refreshInventory(false);
   if (name === "purchases" || name === "sales" || name === "purchase-history") refreshTransactions();
   if (name === "analytics") refreshAnalytics();
+  if (name === "history-price-repair" && typeof initHistoryPriceRepairPanel === "function") initHistoryPriceRepairPanel();
   if (name === "accounts") refreshAccounts();
   if (name === "steam-guard") initSteamGuardPanel();
   if (name !== "steam-guard") stopSteamGuardTimer();

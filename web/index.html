@@ -300,6 +300,14 @@
           </svg>
           <span>数据分析</span>
         </button>
+        <button class="nav-item" data-tab="history-price-repair">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12a9 9 0 1 0 2.64-6.36"></path>
+            <polyline points="3 3 3 9 9 9"></polyline>
+            <path d="M12 7v5l3 2"></path>
+          </svg>
+          <span>历史价格校准</span>
+        </button>
         <button class="nav-item" data-tab="sales">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -578,6 +586,51 @@
             </thead>
             <tbody></tbody>
           </table>
+        </div>
+      </section>
+
+      <section id="panel-history-price-repair" class="panel">
+        <div class="panel-toolbar">
+          <div>
+            <span class="label">历史价格校准</span>
+            <p class="muted small">只修复「操作记录」中的成交价；「数据分析」随操作记录自动重算。上架记录仅作为人民币价格与时间证据，模块不会修改上架记录。</p>
+          </div>
+          <button type="button" id="history-price-repair-preview" class="btn btn-primary">读取 Steam 历史并生成预览</button>
+        </div>
+        <div id="history-price-repair-status" class="muted small" role="status">点击读取按钮后，系统会分页读取 Steam Sold 记录，与本地购入记录及人民币上架记录比对；预览阶段不会修改数据库。</div>
+        <div id="history-price-repair-summary" class="purchases-summary"></div>
+        <div class="panel-toolbar">
+          <div class="panel-toolbar-row">
+            <label><input type="checkbox" id="history-price-repair-select-all" /> 全选可应用项目</label>
+            <span id="history-price-repair-selected-count" class="muted small">已选择 0 条</span>
+          </div>
+          <button type="button" id="history-price-repair-apply" class="btn btn-primary" disabled>备份并应用所选修复</button>
+        </div>
+        <div class="table-container">
+          <table id="history-price-repair-table">
+            <thead>
+              <tr>
+                <th>选择</th>
+                <th>物品 / AssetID</th>
+                <th>当前成交价</th>
+                <th>建议成交价</th>
+                <th>Steam 原始成交</th>
+                <th>Steam 成交时间</th>
+                <th>人民币上架锚点</th>
+                <th>推算汇率</th>
+                <th>置信度</th>
+                <th>匹配证据</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="10" class="muted">尚未生成预览。</td></tr></tbody>
+          </table>
+        </div>
+        <div class="panel-toolbar">
+          <span class="label">最近修复记录与回滚</span>
+          <button type="button" class="btn btn-sm btn-secondary" id="history-price-repair-audit-refresh" onclick="loadHistoryPriceRepairAudit()">刷新</button>
+        </div>
+        <div id="history-price-repair-audit" class="table-container">
+          <div class="muted small">暂无修复批次记录。</div>
         </div>
       </section>
 
@@ -1846,6 +1899,7 @@
   <script src="/js/console.js"></script>
   <script src="/js/steamGuard.js"></script>
   <script src="/js/transactions.js"></script>
+  <script src="/js/historyPriceRepair.js?v=1"></script>
   <script src="/js/settings.js?v=5"></script>
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
