@@ -103,6 +103,43 @@ _CURRENCY_MAP = {
 }
 _NO_DIVIDE_CURRENCIES = {8, 16, 15}
 
+# Steam 钱包接口只返回地区代码，不直接给出币种；该地区未开通钱包时用本地币种兜底。
+_COUNTRY_FALLBACK_CURRENCY = {
+    "CN": "CNY",
+}
+
+
+def _currency_id_for_code(code: str) -> int:
+    code = (code or "").strip().upper()
+    if not code:
+        return 0
+    for currency_id, (currency_code, _symbol) in _CURRENCY_MAP.items():
+        if currency_code == code:
+            return int(currency_id)
+    return 0
+
+
+def _parse_market_ssr_wallet(text: str) -> dict:
+    """解析社区市场页（React SSR）内嵌的 CurrentUserWalletDetails 数据。
+
+    Steam 已移除旧版 g_rgWalletInfo 全局变量，钱包状态改为 React Query
+    预置状态，形如 {"has_wallet": false, "user_country_code": "CN", ...}。
+    """
+    if not text:
+        return {}
+    idx = text.find("CurrentUserWalletDetails")
+    if idx < 0:
+        return {}
+    window = text[max(0, idx - 3000):idx].replace('\\"', '"')
+    start = window.rfind('{"has_wallet":')
+    if start < 0:
+        return {}
+    try:
+        data, _end = json.JSONDecoder().raw_decode(window[start:])
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
 _COUNTRY_CODE_KEYS = (
     "country_code",
     "country",
@@ -196,6 +233,7 @@ def get_wallet_balance(cookies_raw: str) -> dict:
     pm = get_proxy_manager()
     proxies = pm.get_proxies_for_request()
     unknown_currency_id = None
+    market_text = ""
     try:
         resp = requests.get(
             "https://steamcommunity.com/market/",
@@ -205,6 +243,7 @@ def get_wallet_balance(cookies_raw: str) -> dict:
             verify=False,
             timeout=15,
         )
+        market_text = resp.text or ""
         if resp.status_code == 429:
             steam_market_cooldown.defer(resp.headers.get("Retry-After"))
             check_steam_market_cooldown()
@@ -241,6 +280,37 @@ def get_wallet_balance(cookies_raw: str) -> dict:
         raise
     except Exception:
         pass
+    market_wallet = _parse_market_ssr_wallet(market_text)
+    market_wallet_missing = False
+    market_wallet_country = ""
+    if market_wallet and not bool(market_wallet.get("has_wallet")):
+        market_wallet_missing = True
+        market_wallet_country = _normalize_country_code(
+            market_wallet.get("wallet_country_code")
+            or market_wallet.get("user_country_code")
+        )
+        if not market_wallet.get("has_wallet_in_other_regions"):
+            # 余额为 0 且未开通钱包时 Steam 不返回币种；地区币种由本地钱包决定，
+            # 这里仅在明确地区时兜底，避免把未知地区误判成别的币种。
+            fallback_code = _COUNTRY_FALLBACK_CURRENCY.get(market_wallet_country)
+            fallback_id = _currency_id_for_code(fallback_code) if fallback_code else 0
+            if fallback_id:
+                symbol = _CURRENCY_MAP[fallback_id][1]
+                display = (
+                    f"{symbol}0"
+                    if fallback_id in _NO_DIVIDE_CURRENCIES
+                    else f"{symbol}0.00"
+                )
+                return {
+                    "balance_raw": 0,
+                    "balance_display": display,
+                    "currency_code": fallback_code,
+                    "currency_symbol": symbol,
+                    "currency_id": fallback_id,
+                    "wallet_country": market_wallet_country,
+                    "country_code": market_wallet_country,
+                    "wallet_available": False,
+                }
     try:
         check_steam_market_cooldown()
         jwt_token, _, _ = get_base_auth_status(cookies_raw)
@@ -288,6 +358,11 @@ def get_wallet_balance(cookies_raw: str) -> dict:
         pass
     if unknown_currency_id is not None:
         raise RuntimeError(f"未知 Steam 钱包币种 ID: {unknown_currency_id}")
+    if market_wallet_missing:
+        raise RuntimeError(
+            "该账号尚未开通 Steam 钱包"
+            f"（地区 {market_wallet_country or '未知'}），无法确认结算币种"
+        )
     raise RuntimeError("无法获取 Steam 钱包余额，请确认 Cookie 有效且账户已设置钱包")
 def extract_appid_from_url(url: str) -> str:
     m = re.search(r'/app/(\d+)', url)
