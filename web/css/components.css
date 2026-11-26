@@ -5371,3 +5371,35 @@ textarea.app-modal-input {
   justify-content: center;
   gap: 6px;
 }
+/* 持久化字段填写状态徽标 */
+.field-status {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.field-status.is-filled {
+  color: #1f7a3d;
+  background: rgba(46, 160, 67, 0.12);
+  border-color: rgba(46, 160, 67, 0.35);
+}
+
+.field-status.is-empty {
+  color: #9a5b00;
+  background: rgba(255, 166, 0, 0.14);
+  border-color: rgba(255, 166, 0, 0.4);
+}
+
+.field-status.is-off {
+  color: #6b7280;
+  background: rgba(107, 114, 128, 0.12);
+  border-color: rgba(107, 114, 128, 0.3);
+}
+

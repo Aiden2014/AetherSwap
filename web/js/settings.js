@@ -222,6 +222,9 @@ async function loadConfig() {
   if (gSdRegionThreads) gSdRegionThreads.value = sd.max_region_threads ?? "";
   // 加载完成后刷新 UX 状态组件
   updateUXStatus(c);
+  bindBuffCookieSave();
+  annotatePersistedFields();
+  refreshBuffCookieState();
 }
 
 function formToConfig() {
@@ -324,12 +327,12 @@ function formToConfig() {
       email_timeout_seconds: el("cfg-email_timeout_seconds") ? parseInt(el("cfg-email_timeout_seconds").value, 10) || undefined : undefined,
     },
     steam_guard: {
-      shared_secret: el("cfg-steam-shared-secret") ? el("cfg-steam-shared-secret").value.trim() : undefined,
+      shared_secret: el("cfg-steam-shared-secret") ? el("cfg-steam-shared-secret").value.trim() || undefined : undefined,
     },
     steam_confirm: {
       enabled: !!el("cfg-steam-auto-confirm")?.checked,
-      identity_secret: el("cfg-steam-identity-secret") ? el("cfg-steam-identity-secret").value.trim() : undefined,
-      device_id: el("cfg-steam-device-id") ? el("cfg-steam-device-id").value.trim() : undefined,
+      identity_secret: el("cfg-steam-identity-secret") ? el("cfg-steam-identity-secret").value.trim() || undefined : undefined,
+      device_id: el("cfg-steam-device-id") ? el("cfg-steam-device-id").value.trim() || undefined : undefined,
     },
     system: {
       exchange_rate_refresh_hours: el("cfg-exchange-refresh-hours") ? parseFloat(el("cfg-exchange-refresh-hours").value) || undefined : undefined,
@@ -903,6 +906,137 @@ function renderGettingStartedCard(cfg, accounts) {
       localStorage.setItem("aetherswap_gs_card_closed", "1");
       card.style.display = "none";
     });
+  }
+}
+
+async function refreshBuffCookieState() {
+  const statusEl = el("cfg-buff-cookie-status");
+  if (!statusEl) return;
+  try {
+    const d = await fetchJson(API + "/status");
+    statusEl.textContent = d.buff_no_cookie
+      ? "当前未保存 Buff Cookie（流水线会报 CONFIG_ERROR）"
+      : "当前已保存 Buff Cookie ✓";
+    statusEl.style.color = d.buff_no_cookie ? "var(--danger, #c0392b)" : "";
+  } catch (e) {
+    statusEl.textContent = "Cookie 状态未知";
+  }
+}
+
+function bindBuffCookieSave() {
+  const btn = el("cfg-buff-cookie-save");
+  const input = el("cfg-buff-cookie");
+  if (!btn || !input || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", async () => {
+    const cookies = input.value.trim();
+    if (!cookies) {
+      toast("未保存", "Cookie 不能为空");
+      return;
+    }
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "校验中…";
+    try {
+      const r = await fetchJson(API + "/auth/buff/manual_cookie", {
+        method: "POST",
+        body: JSON.stringify({ cookies, user_agent: navigator.userAgent || "" }),
+      });
+      if (!r || r.ok !== true) throw new Error((r && r.error) || "Cookie 保存失败");
+      toast("Buff Cookie 已保存", r.message || "已通过在线校验");
+      input.value = "";
+      await refreshBuffCookieState();
+      if (typeof refreshStatus === "function") refreshStatus();
+    } catch (e) {
+      toast("Buff Cookie 保存失败", e.message || "");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  });
+}
+
+const PERSISTED_FIELD_IDS = [
+  "cfg-games", "cfg-platforms", "cfg-sort_by", "cfg-min_price", "cfg-max_price", "cfg-min_volume",
+  "cfg-buff-game", "cfg-price_tolerance", "cfg-pay-priority",
+  "cfg-target_balance", "cfg-max_discount", "cfg-huge_profit_offset", "cfg-iflow_top_n",
+  "cfg-sell_ratio", "cfg-retry_interval_seconds", "cfg-exclude_keywords",
+  "cfg-verbose-debug", "cfg-steam-listings-debug", "cfg-sell_strategy",
+  "cfg-sell_price_offset", "cfg-sell_price_wall_volume", "cfg-sell_price_max_ignore_volume",
+  "cfg-sell_trend_days", "cfg-max-listings-per_item", "cfg-listing_delay_seconds", "cfg-resell_ratio",
+  "cfg-safe_purchase_hard_qty_cap", "cfg-safe_purchase_liquidity_ratio",
+  "cfg-safe_purchase_low_price_threshold", "cfg-safe_purchase_low_price_penalty",
+  "cfg-safe_purchase_low_price_hard_cap", "cfg-sell_pressure_orders_n", "cfg-sell_pressure_threshold",
+  "cfg-current-price-refresh-minutes",
+  "cfg-start-time-limit-enabled", "cfg-start-time-hour", "cfg-end-time-hour",
+  "cfg-stability-days", "cfg-cv_threshold", "cfg-r2_threshold", "cfg-price_percentile_ceil",
+  "cfg-r2_rising_threshold", "cfg-slope_pct_ceil", "cfg-ma_deviation_ceil", "cfg-last_price_ma30_ceil",
+  "cfg-slope_stable_floor", "cfg-price_percentile_ceil_rising", "cfg-use_vwap",
+  "cfg-inv-refresh",
+  "cfg-desktop-payment-enabled", "cfg-desktop-payment-duration", "cfg-pushplus_token",
+  "cfg-holdings_report_interval_hours", "cfg-holdings_report_change_threshold_pct", "cfg-holdings-drop-enabled",
+  "cfg-email_user", "cfg-email_pass", "cfg-imap_server", "cfg-target_sender", "cfg-allowed_sender",
+  "cfg-subject_success", "cfg-subject_fail", "cfg-email_timeout_seconds",
+  "cfg-steam-shared-secret",
+  "cfg-steam-auto-confirm", "cfg-steam-identity-secret", "cfg-steam-device-id",
+  "cfg-exchange-refresh-hours", "cfg-buff-session-keepalive-enabled", "cfg-session-keepalive-hours", "cfg-ui_scale",
+  "cfg-steam-deals-enabled", "cfg-steam-deals-auto-refresh-days",
+  "cfg-steam-deals-game-threads", "cfg-steam-deals-region-threads",
+];
+
+function describeFieldStatus(node) {
+  const id = node.id || "";
+  if (node.type === "checkbox") {
+    return node.checked ? ["已开启", "is-filled"] : ["未开启", "is-off"];
+  }
+  if (node.tagName === "SELECT") {
+    return node.value ? ["已选择", "is-filled"] : ["未选择", "is-empty"];
+  }
+  const value = (node.value || "").trim();
+  const isSecret = /secret|token|pass|pushplus/i.test(id);
+  if (value) return [isSecret ? "已配置" : "已填写", "is-filled"];
+  return [isSecret ? "未配置" : "未填写", "is-empty"];
+}
+
+function annotatePersistedFields() {
+  for (const id of PERSISTED_FIELD_IDS) {
+    const node = el(id);
+    if (!node) continue;
+    const field = node.closest(".field");
+    if (!field) continue;
+    let badge = field.querySelector(".field-status");
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "field-status";
+      const label = field.querySelector("label");
+      (label || field).appendChild(badge);
+    }
+    const [text, cls] = describeFieldStatus(node);
+    badge.textContent = text;
+    badge.className = "field-status " + cls;
+    if (node.dataset.fieldStatusBound !== "1") {
+      node.dataset.fieldStatusBound = "1";
+      node.addEventListener("input", annotatePersistedFields);
+      node.addEventListener("change", annotatePersistedFields);
+    }
+  }
+
+  // 支付方式：多选组按已勾选数量显示
+  const payAlipay = el("cfg-pay-alipay");
+  if (payAlipay) {
+    const field = payAlipay.closest(".field");
+    if (field) {
+      let badge = field.querySelector(".field-status");
+      if (!badge) {
+        badge = document.createElement("span");
+        badge.className = "field-status";
+        const label = field.querySelector("label");
+        (label || field).appendChild(badge);
+      }
+      const count = ["cfg-pay-alipay", "cfg-pay-wechat"].filter((pid) => el(pid) && el(pid).checked).length;
+      badge.textContent = count ? `已选 ${count} 种` : "未选择";
+      badge.className = "field-status " + (count ? "is-filled" : "is-empty");
+    }
   }
 }
 
