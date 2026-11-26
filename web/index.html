@@ -1020,14 +1020,32 @@
                 <div class="field">
                   <label for="cfg-ui_scale">界面缩放比例(内部浏览器)</label>
                   <select id="cfg-ui_scale">
-                    <option value="0.7" selected>70% (默认)</option>
+                    <option value="0.7">70% (默认)</option>
                     <option value="0.8">80%</option>
+                    <option value="0.875">87.5% (≈ 默认70% × 浏览器125%)</option>
                     <option value="0.9">90%</option>
                     <option value="1.0">100%</option>
                     <option value="1.1">110%</option>
                     <option value="1.2">120%</option>
+                    <option value="1.25">125%</option>
                   </select>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <h2>Buff 登录</h2>
+            <div class="form-grid">
+              <div class="field" style="grid-column: 1 / -1;">
+                <label for="cfg-buff-cookie">手动填写 Buff Cookie</label>
+                <textarea id="cfg-buff-cookie" rows="3" spellcheck="false"
+                  placeholder="session=...; csrf_token=...; 其他字段可选"
+                  title="从已登录 buff.163.com 的浏览器开发者工具复制完整 Cookie。保存前会先做一次只读在线校验。"></textarea>
+                <span class="field-hint" id="cfg-buff-cookie-status">正在读取状态…</span>
+              </div>
+              <div class="field field--switch">
+                <button type="button" id="cfg-buff-cookie-save" class="btn btn-secondary">保存 Buff Cookie</button>
               </div>
             </div>
           </div>
@@ -1846,7 +1864,7 @@
   <script src="/js/console.js"></script>
   <script src="/js/steamGuard.js"></script>
   <script src="/js/transactions.js"></script>
-  <script src="/js/settings.js?v=5"></script>
+  <script src="/js/settings.js?v=7"></script>
   <script src="/js/proxy.js"></script>
   <script src="/js/strategies.js"></script>
   <script src="/js/main.js?v=9"></script>
